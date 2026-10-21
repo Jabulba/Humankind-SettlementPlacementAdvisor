@@ -1,0 +1,37 @@
+# Camp Placement Advisor Resources
+
+## Knowledge
+
+- [BepInEx dev guide: Patching methods during runtime](https://docs.bepinex.dev/articles/dev_guide/runtime_patching.html)
+  Official BepInEx docs on HarmonyX patching: attributes, TargetMethod, postfixes. Use for: any patch work.
+- [Harmony 2 documentation (pardeike)](https://harmony.pardeike.net/)
+  Canonical Harmony docs: PatchAll, patch types, injection parameters (`__instance`, `__result`). Use for: patch mechanics.
+- [Harmony: Class AccessTools](https://harmony.pardeike.net/api/HarmonyLib.AccessTools.html)
+  Reflection helpers the mod uses to reach private game members. Use for: GameApi work.
+- [HUMANKIND Official Modding Guide (PDF)](https://medias.games2gether.com/universes/humankind/mods/HUMANKIND_Official_Modding_Guide.pdf)
+  Publisher/developer modding guide: mod types, tooling, what the game supports officially. Use for: game-specific mod context.
+- Local: plan doc in git history (`git show e89ce24:docs/plans/2026-10-21-camp-placement-advisor.md`,
+  removed 2026-10-22). The approved spec with the verified vanilla-mechanism anchors.
+  Use for: why each rule exists.
+- Local: `GLOSSARY.md` (repo)
+  Canonical module and domain vocabulary. Use for: naming things consistently in lessons and changes.
+- Local: `../Humankind/reference/managed/Firstpass.decompiled.cs`
+  Full decompile of the simulation assembly (`Firstpass.dll`); plan anchors `FP:NNNN` are line numbers here. Use for: vanilla behavior facts.
+- Local: `../Humankind/reference/outgame/Assembly-CSharp.decompiled.cs`
+  Full decompile of the Unity presentation assembly (`Assembly-CSharp.dll`); plan anchors `AC:NNNN`. Use for: UI/cursor/pins facts.
+
+## Wisdom (Communities)
+
+- [Humankind modding forum (Amplitude Community)](https://community.amplitude-studios.com/amplitude-studios/humankind/forums/178-modding)
+  Official modding forum, includes the Modders Nexus guide thread. Use for: BepInEx-in-Humankind practice, DLL-mod questions.
+- [r/HumankindTheGame](https://www.reddit.com/r/HumankindTheGame/)
+  Player community with modding threads. Use for: player-facing feedback on the advisor UX.
+- [mod.io Humankind](https://mod.io/g/humankind/r)
+  Official mod distribution; documents what shipped mods do. Use for: seeing prior art for placement UI.
+
+## Gaps
+
+- No high-trust doc found for Humankind's simulation/presentation threading model; knowledge
+  so far comes from the decompiled code anchors in the plan doc. Keep it citation-driven.
+- No BepInEx-under-Proton (Linux) guide found; the repo's `scripts/launch-game.sh` +
+  `LogOutput.log` grep workflow is the working reference.

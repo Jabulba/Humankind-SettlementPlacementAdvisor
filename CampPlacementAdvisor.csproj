@@ -1,0 +1,99 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Standalone UI mod: camp placement advisor. Build: scripts/build-advisor.sh
+       Rules: README.md; module vocabulary: GLOSSARY.md.
+       Independent of the brain-harness projects; issues no orders. -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <AssemblyName>CampPlacementAdvisor</AssemblyName>
+    <RootNamespace>CampPlacementAdvisor</RootNamespace>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Nullable>disable</Nullable>
+    <DebugType>none</DebugType>
+    <Version>0.1.0</Version>
+    <!-- Game ships its own copies of these; don't export them. -->
+    <NoWarn>CS0436;CS0618</NoWarn>
+  </PropertyGroup>
+
+  <!-- Debug harness sources live under scripts/ (own projects): keep them and their
+       generated obj/ files out of this project's default compile glob. -->
+  <ItemGroup>
+    <Compile Remove="scripts/**/*.cs" />
+  </ItemGroup>
+
+  <!-- Paths; override GameDir with -p:GameDir=... if the install moves. -->
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == ''">/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind</GameDir>
+    <GameManagedDir>$(GameDir)/Humankind_Data/Managed</GameManagedDir>
+    <BepInExCoreDir>$(GameDir)/BepInEx/core</BepInExCoreDir>
+    <BepInExPluginsDir>$(GameDir)/BepInEx/plugins</BepInExPluginsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- BepInEx + Harmony (provided at runtime) -->
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCoreDir)/BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCoreDir)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity engine (from the game) -->
+  <ItemGroup>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameManagedDir)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(GameManagedDir)/UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Game logic:
+       Firstpass: CampPlacementEvaluation, DistrictPlacementEvaluation, FimsInfo, AI Snapshots,
+                  SimulationEntityGUID, WorldPosition.
+       Amplitude.Mercury.Data: ArmyActionType enum.
+       Amplitude: StaticString. Amplitude.Framework: FixedPoint (Amplitude.Core namespace). -->
+  <ItemGroup>
+    <Reference Include="Amplitude.Mercury.Firstpass">
+      <HintPath>$(GameManagedDir)/Amplitude.Mercury.Firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Amplitude.Mercury.Data">
+      <HintPath>$(GameManagedDir)/Amplitude.Mercury.Data.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Amplitude">
+      <HintPath>$(GameManagedDir)/Amplitude.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Amplitude.Core">
+      <HintPath>$(GameManagedDir)/Amplitude.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Amplitude.Framework">
+      <HintPath>$(GameManagedDir)/Amplitude.Framework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameManagedDir)/Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CopyToPlugins" AfterTargets="Build">
+    <MakeDir Directories="$(BepInExPluginsDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPluginsDir)" />
+    <Message Importance="high" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
+  </Target>
+
+</Project>
