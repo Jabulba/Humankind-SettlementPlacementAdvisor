@@ -11,7 +11,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Nullable>disable</Nullable>
     <DebugType>none</DebugType>
-    <Version>0.1.0</Version>
+    <!-- No <Version>: MinVer stamps the version from git tags (see CONTRIBUTING.md). -->
     <!-- The game ships its own copies of the referenced assemblies: Private=false keeps
          them out of the output. CS0436 stays enabled: it is the loud signal for
          decompiled game sources leaking into this compile. -->
@@ -37,6 +37,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- BepInEx + Harmony (provided at runtime) -->
