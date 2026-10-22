@@ -102,4 +102,20 @@
     <Message Importance="high" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
   </Target>
 
+  <!-- THE MOD VERSION: MinVer's computed version becomes the compile-time constant
+       the BepInPlugin attribute consumes (single source: git tags, CONTRIBUTING.md).
+       The cfg generator header takes its version as a CLI argument in CI. -->
+  <Target Name="GenerateModVersion" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_ModVersionSource>internal static class ModVersion
+{
+    public const string Value = "$(Version)"%3B
+}</_ModVersionSource>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)modversion.g.cs" Lines="$(_ModVersionSource)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)modversion.g.cs" />
+    </ItemGroup>
+  </Target>
+
 </Project>

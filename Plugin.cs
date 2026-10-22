@@ -13,10 +13,9 @@ namespace SettlementPlacementAdvisor
     /// writes the advisor's tail slots of the placement evaluation array.
     /// Rules: README.md; module vocabulary: GLOSSARY.md.
     /// </summary>
-    [BepInPlugin(AdvisorConfig.PluginGuid, AdvisorConfig.PluginName, PluginVersion)]
+    [BepInPlugin(AdvisorConfig.PluginGuid, AdvisorConfig.PluginName, ModVersion.Value)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string PluginVersion = "0.1.0";
 
         internal static ConfigEntry<int> CfgTopHovered;
         internal static ConfigEntry<int> CfgTopNeighbour;
