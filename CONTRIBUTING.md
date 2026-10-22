@@ -81,7 +81,8 @@ Release build, `scripts/test-range.sh`.
 
 MinVer derives the version from git tags; it is stamped into the
 `BepInPlugin` attribute at compile time (`GenerateModVersion` target).
-Untagged builds report `0.0.0-alpha.0.<n>` (distance from the latest tag).
+Untagged builds compute `1.0.0-alpha.0.<n>` (`<n>` is the distance
+from the latest tag).
 
 Release = push an annotated tag `vX.Y.Z`; `.github/workflows/release.yml` builds,
 generates the pre-generated cfg (`scripts/gen-cfg.sh`), zips
