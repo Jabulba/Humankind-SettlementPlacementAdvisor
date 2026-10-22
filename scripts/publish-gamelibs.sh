@@ -11,13 +11,15 @@ version="${1:?usage: scripts/publish-gamelibs.sh <game-build-version>}"
 GAMEDIR="${GAMEDIR:-/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 libs="${GAMLIBS_REPO:-$(dirname "$here")/Humankind-GameLibs}"
-
 mkdir -p "$libs/dlls"
-for d in Amplitude.Mercury.Firstpass Amplitude.Mercury.Data Amplitude Amplitude.Core \
-         Amplitude.Framework Assembly-CSharp UnityEngine UnityEngine.CoreModule; do
-    cp "$GAMEDIR/Humankind_Data/Managed/$d.dll" "$libs/dlls/"
-done
-cp "$GAMEDIR/BepInEx/core/BepInEx.dll" "$GAMEDIR/BepInEx/core/0Harmony.dll" "$libs/dlls/"
+# Superset staging: every Managed DLL + every BepInEx core DLL. The compile
+# closure (RAR from the old HintPath form) spans the full Unity module set,
+# Sirenix, MonoMod/Cecil: shipping the whole directory keeps the runtime graph
+# complete for headless harness use.
+find "$GAMEDIR/Humankind_Data/Managed" -maxdepth 1 -name '*.dll' -exec cp {} "$libs/dlls/" \;
+# 0Harmony20 is BepInEx's net20 fallback profile: same types as 0Harmony,
+# keeping both yields CS0433 type duplication in every mod compile.
+find "$GAMEDIR/BepInEx/core" -maxdepth 1 -name '*.dll' ! -name '0Harmony20.dll' -exec cp {} "$libs/dlls/" \;
 
 DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 export DOTNET_ROOT
