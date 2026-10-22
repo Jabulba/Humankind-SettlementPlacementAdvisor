@@ -45,7 +45,7 @@
   </ItemGroup>
 
 
-  <Target Name="CopyToPlugins" AfterTargets="Build">
+  <Target Name="CopyToPlugins" AfterTargets="Build" Condition="Exists('$(GameDir)')">
     <MakeDir Directories="$(BepInExPluginsDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPluginsDir)" />
     <Message Importance="high" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
