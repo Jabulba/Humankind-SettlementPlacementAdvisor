@@ -62,6 +62,16 @@ namespace SettlementPlacementAdvisor
                 return;
             }
 
+            // A ZERO-PICK result (every in-range territory claimed, all-water, siteless, or
+            // unexplored) deactivates: publishing an ACTIVE empty set would suppress vanilla's
+            // best-placement pins through the gate while adding no picks, leaving only the
+            // hovered tile's pin. Inactive hands the whole pin gate back to vanilla.
+            if (picks.Length == 0)
+            {
+                PublishEmpty(evaluation);
+                return;
+            }
+
             m_Writer.Write(evaluation, picks, cursorTile);
 
             var tiles = new int[picks.Length];

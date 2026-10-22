@@ -34,7 +34,9 @@ the domain and the modules at its seams.
 - **Publish**: swap a new pick set into the volatile channel. Only a pick-content change
   publishes; identical content bumps no version. An INACTIVE publish is the advisor's
   deactivation: stars stop and the FIMS pin gate returns to vanilla. It is the only thing
-  the advisor does on a placement mode it does not own.
+  the advisor does on a placement mode it does not own, and on a zero-pick result: an ACTIVE
+  empty set would suppress vanilla's pins without replacing them, so nothing-to-advise
+  publishes inactive.
 - **Tail**: the fixed slot window in `CampPlacementEvaluation.ValidTiles` owned by the
   evaluation writer. The base slot is the cursor slot, vanilla's append point after a
   full-eval `Initialize` (`UpdateCurrentPosition` appends the cursor entry at the baseline

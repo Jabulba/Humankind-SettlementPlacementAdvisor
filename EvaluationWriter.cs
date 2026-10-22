@@ -135,10 +135,16 @@ namespace SettlementPlacementAdvisor
             evaluation.ValidTileCount = needed;
         }
 
-        /// <summary>Drop the advisor's contribution (inactive or failure path).</summary>
+        /// <summary>
+        /// Drop the advisor's contribution (inactive or failure path). Count can never shrink
+        /// below what a previous Write raised (vanilla's cursor entry may sit above the tail),
+        /// so the pick slots are also scrubbed: stale pick tiles must not sit inside the live
+        /// ValidTileCount window (a duplicate of vanilla's best tile would render two pins).
+        /// </summary>
         public void ClearTail(CampPlacementEvaluation evaluation)
         {
             Write(evaluation, s_Empty, -1);
+            ReleaseTail(evaluation);
         }
 
         /// <summary>

@@ -14,6 +14,7 @@ using SettlementPlacementAdvisor;
 internal sealed class GraphSurface : GameSurface
 {
     public bool ReadyFlag = true;
+    public bool AllClaimed; // C2: report every territory as claimed
 
     public bool Ready { get { return ReadyFlag; } }
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
@@ -30,9 +31,11 @@ internal sealed class GraphSurface : GameSurface
         return true;
     }
 
+    public int DistrictFrame = 1;
+
     public bool GetCurrentFrames(out int districtFrame, out int constructionFrame, out int visibilityFrame)
     {
-        districtFrame = 1; constructionFrame = 1; visibilityFrame = 1;
+        districtFrame = DistrictFrame; constructionFrame = 1; visibilityFrame = 1;
         return true;
     }
 
@@ -44,7 +47,7 @@ internal sealed class GraphSurface : GameSurface
 
     public bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles)
     {
-        isOcean = false; isClaimed = false;
+        isOcean = false; isClaimed = AllClaimed;
         tiles = new int[] { 100 + territoryIndex * 10 + 1, 100 + territoryIndex * 10 + 2, 100 + territoryIndex * 10 + 3 };
         return true;
     }
@@ -213,7 +216,7 @@ internal static class Program
             settlement.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity);
 
         Refresh(settlement, 131); // cursor tile inside the synthetic territory space (territory 3)
-        var tiles = PickSet.Current.Tiles;
+        var tiles = PickSet.Current == null || PickSet.Current.Tiles == null ? new int[0] : PickSet.Current.Tiles;
         int inTail = 0;
         for (int i = baseline + 1; i < settlement.ValidTileCount; i++)
             for (int t = 0; t < tiles.Length; t++)
@@ -258,6 +261,29 @@ internal static class Program
 
         PickSet.Current = null;
         Gate("no pick set at all: vanilla answer survives", true, bestTile, true);
+
+        // C2. Zero-pick publish (all in-range territories claimed): the advisor must
+        // deactivate, NOT publish an active empty set, because an active set suppresses the
+        // vanilla best pins without replacing them (observed in-game: only the hovered tile
+        // keeps its FIMS pin).
+        surface.AllClaimed = true;
+        surface.DistrictFrame++; // cache-key bump: per-territory caches must miss
+        Refresh(settlement, 130);
+        Check("zero-pick refresh deactivates the pick set (no active empty set)", Inactive());
+        int foreignSlots = 0;
+        for (int i = 0; i < settlement.ValidTileCount; i++)
+        {
+            int idx = settlement.ValidTiles[i].TileIndex;
+            if (i < baseline + 1) continue; // vanilla entries are never touched
+            if (idx == -1) continue; // scrubbed advisor slot: vanilla skips it
+            if (idx == 130) continue; // vanilla's own cursor entry
+            foreignSlots++;
+        }
+        Check("zero-pick refresh leaves no pick entries inside the valid window",
+            Inactive() && foreignSlots == 0);
+        Gate("zero-pick refresh: vanilla best pin survives", true, bestTile, true);
+        surface.AllClaimed = false;
+        surface.DistrictFrame++; // restore: later blocks expect land tiles
 
         // D. The !Ready half of the Run gate: a not-ready refresh writes nothing in either mode
         // and deactivates.
