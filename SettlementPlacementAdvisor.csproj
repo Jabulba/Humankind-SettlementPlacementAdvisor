@@ -27,11 +27,17 @@
     <None Remove="reference/**" />
   </ItemGroup>
 
-  <!-- Paths; override GameDir with -p:GameDir=... if the install moves. -->
+  <!-- THE GAME INSTALL PATH, resolved per machine: -p:GameDir=... wins, then the
+       GAME_DIR environment variable (the same knob scripts/launch-game.sh reads),
+       then the standard Steam Linux install under the current user's home. Nothing
+       here is machine-specific: a clone elsewhere builds and deploys unchanged.
+       GameManagedDir/BepInExCoreDir are gone: the GameLibs package replaced the
+       HintPath references, nothing consumed them. -->
   <PropertyGroup>
-    <GameDir Condition="'$(GameDir)' == ''">/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind</GameDir>
-    <GameManagedDir>$(GameDir)/Humankind_Data/Managed</GameManagedDir>
-    <BepInExCoreDir>$(GameDir)/BepInEx/core</BepInExCoreDir>
+    <!-- GetEnvironmentVariable, not $(Env:GAME_DIR): the .NET SDK's MSBuild evaluates
+         Env: to an empty string, so the Env: form silently falls through to the default. -->
+    <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetEnvironmentVariable('GAME_DIR'))</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetFolderPath(SpecialFolder.UserProfile))/.local/share/Steam/steamapps/common/Humankind</GameDir>
     <BepInExPluginsDir>$(GameDir)/BepInEx/plugins</BepInExPluginsDir>
   </PropertyGroup>
 
@@ -45,10 +51,14 @@
   </ItemGroup>
 
 
-  <Target Name="CopyToPlugins" AfterTargets="Build" Condition="Exists('$(GameDir)')">
-    <MakeDir Directories="$(BepInExPluginsDir)" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPluginsDir)" />
-    <Message Importance="high" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
+  <!-- Deploy only when the install exists; the skip is loud so a build on a machine
+       without the game never looks like a successful deploy. -->
+  <Target Name="CopyToPlugins" AfterTargets="Build">
+    <Message Importance="high" Condition="!Exists('$(GameDir)')"
+             Text="GameDir '$(GameDir)' not found: $(TargetFileName) NOT deployed (pass -p:GameDir=... or export GAME_DIR)" />
+    <MakeDir Condition="Exists('$(GameDir)')" Directories="$(BepInExPluginsDir)" />
+    <Copy Condition="Exists('$(GameDir)')" SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPluginsDir)" />
+    <Message Importance="high" Condition="Exists('$(GameDir)')" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
   </Target>
 
   <!-- THE MOD VERSION: MinVer's computed version becomes the compile-time constant

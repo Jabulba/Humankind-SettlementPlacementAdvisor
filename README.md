@@ -21,8 +21,9 @@ counts that ignore the vanilla minimum-FIMS gate, exploration filtering, and no 
 
     scripts/build-advisor.sh
 
-Requires the dotnet SDK at `~/.dotnet` (script sets `DOTNET_ROOT`/`PATH`). Game install path is set by `GameDir` in the
-csproj (override with `-p:GameDir=...`). BepInEx only loads plugins at process start: after a rebuild, restart the game.
+Requires the dotnet SDK at `~/.dotnet` (script sets `DOTNET_ROOT`/`PATH`). The game install path resolves per machine: `-p:GameDir=...`,
+then `GAME_DIR`, then `~/.local/share/Steam/steamapps/common/Humankind`; the build says so loudly and skips the deploy when the directory is
+absent. BepInEx only loads plugins at process start: after a rebuild, restart the game.
 Per clone once: `git config core.hooksPath scripts/hooks` and `git config commit.template .gitmessage`.
 Restore resolves compile-time game assemblies from the private GameLibs feed: export `GITHUB_TOKEN=<read:packages PAT>` (CONTRIBUTING.md).
 
