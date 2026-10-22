@@ -6,7 +6,7 @@ using HarmonyLib;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Camp-placement advisor composition root: recommended-tile stars with FIMS pins.
+    /// Settlement-placement advisor composition root: recommended-tile stars with FIMS pins.
     /// Rules: README.md. Module vocabulary: GLOSSARY.md.
     /// </summary>
     [BepInPlugin(AdvisorConfig.PluginGuid, AdvisorConfig.PluginName, ModVersion.Value)]
@@ -49,7 +49,7 @@ namespace SettlementPlacementAdvisor
 
             var harmony = new Harmony(AdvisorConfig.PluginGuid);
             harmony.PatchAll(typeof(Plugin).Assembly);
-            Log("Ready: advisor patches active; star rendering wires on the first camp placement refresh.");
+            Log("Ready: advisor patches active; star rendering wires on the first settlement placement refresh.");
         }
     }
 }

@@ -6,10 +6,10 @@ using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Puts picks into the camp placement evaluation for the FIMS pins and suppresses the
-    /// vanilla glyphs. Camp placement writes only: FoundCity and FoundCityWithSettler share
+    /// Puts picks into the settlement placement evaluation for the FIMS pins and suppresses the
+    /// vanilla glyphs. Settlement placement writes only: FoundCity and FoundCityWithSettler share
     /// this evaluation type, so the mutating entry point guards on SettleType and a city
-    /// activation only scrubs a tail left by an earlier camp session.
+    /// activation only scrubs a tail left by an earlier settlement session.
     ///
     /// The tail is one fixed window reserved at activation. TailStart is the cursor slot,
     /// vanilla's append point after a full-eval Initialize; slots above it hold the picks,
@@ -36,8 +36,8 @@ namespace SettlementPlacementAdvisor
             if (evaluation.SettleType != ArmyActionType.CreateCamp)
             {
                 // Vanilla scores ValidTiles[0..Length), not [0..ValidTileCount), and skips only
-                // entries under 25 FIMS, so surviving camp picks would compete with real city
-                // candidates. Scrub the tail an earlier camp session left on this evaluation.
+                // entries under 25 FIMS, so surviving settlement picks would compete with real city
+                // candidates. Scrub the tail an earlier settlement session left on this evaluation.
                 ReleaseTail(evaluation);
                 return;
             }
@@ -66,7 +66,7 @@ namespace SettlementPlacementAdvisor
         /// <summary>
         /// Rewrite the pick slots in place (ascending unique tiles, simulation thread). If the
         /// cursor tile is a pick, repoint CurrentPositionIndex at that pick's slot so the ghost
-        /// stays on the cursor tile. Non-camp evaluations return without writing.
+        /// stays on the cursor tile. Non-settlement evaluations return without writing.
         /// </summary>
         public void Write(CampPlacementEvaluation evaluation, Pick[] picks, int cursorTile)
         {
@@ -171,7 +171,7 @@ namespace SettlementPlacementAdvisor
                     flags[i] = DistrictPlacementConditionFlags.None;
             }
 
-            m_TailStart = -1; // the next camp activation re-baselines
+            m_TailStart = -1; // the next settlement activation re-baselines
         }
     }
 }

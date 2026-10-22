@@ -8,7 +8,7 @@ using SettlementPlacementAdvisor;
 using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition;
 
 /// <summary>
-/// DEBUG [rngc2] synthetic graph surface. Territory k has three campable/explored tiles
+/// DEBUG [rngc2] synthetic graph surface. Territory k has three placeable/explored tiles
 /// (100+10k .. 102+10k) scored by tile index, so its best tile is the last one. Adjacency uses
 /// real Territory.Adjacency edges through the production land filter, exercising the shipped
 /// filter and range BFS together.
@@ -28,7 +28,7 @@ internal sealed class GraphSurface : GameSurface
     public bool Ready { get { return true; } }
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
     public int GetArmyEmpireIndex(object army) { return 0; }
-    public bool IsCampableTile(int tileIndex) { return true; }
+    public bool IsSettlementSiteTile(int tileIndex) { return true; }
     public bool IsTileExplored(int tileIndex, int empireIndex) { return true; }
 
     public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)

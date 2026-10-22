@@ -1,6 +1,6 @@
 # AGENTS.md
 
-BepInEx 5 / Harmony mod for HUMANKIND camp (outpost) placement. One plugin project at the repo
+BepInEx 5 / Harmony mod for HUMANKIND settlement placement. One plugin project at the repo
 root (`net472`, C# 7.3). `README.md` is the behavior contract, `GLOSSARY.md` the module/domain
 vocabulary, `CONTRIBUTING.md` the commit/release standard. Read those before changing rules.
 
@@ -45,7 +45,7 @@ reflection adapter.
   `CampPlacementEvaluation`; city sessions must remain a strict no-op (deactivate only). The
   no-op harness enforces this.
 - `EvaluationWriter` owns a fixed tail window in the shared `ValidTiles` array. Write pick slots
-  in place, barrier, then raise `ValidTileCount`; never move vanilla entries. A camp tail left
+  in place, barrier, then raise `ValidTileCount`; never move vanilla entries. A settlement tail left
   after a mode switch must be scrubbed, not merely counted down.
 - `PickSet.Current` is the only cross-thread channel: immutable, volatile, version-gated, with
   entering/leaving diffs. Do not add other shared mutable state or touch Unity objects on the

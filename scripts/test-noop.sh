@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# No-op contract harness: asserts the advisor writes nothing on a non-camp placement
-# evaluation, keeps its camp tail behaviour, and hands the FIMS pin gate back to vanilla.
+# No-op contract harness: asserts the advisor writes nothing on a non-settlement placement
+# evaluation, keeps its settlement tail behaviour, and hands the FIMS pin gate back to vanilla.
 # Non-zero exit = a contract violation.
 set -euo pipefail
 

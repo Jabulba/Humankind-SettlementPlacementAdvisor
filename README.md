@@ -3,9 +3,9 @@
 [![build](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/actions/workflows/push.yml/badge.svg)](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/actions/workflows/push.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place camps (outposts).
+A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place settlements.
 
-While the camp placement cursor is active, the advisor marks the best tiles with stars and
+While the settlement placement cursor is active, the advisor marks the best tiles with stars and
 shows their FIMS yields as pins. The hovered territory gets its top two recommendations; every
 other territory within land-adjacency range gets its best one. City founding is left completely
 alone.
@@ -17,8 +17,8 @@ alone.
 - **Land-aware range**: sea, cliff, mountain and closed-border edges never extend the
   recommendation range.
 - **Uses the game's own evaluation**, including its settlement score weighting.
-- **Safe around city founding**: cities keep their vanilla glyphs, pins and cursor, and any camp
-  tail is released when a city session starts.
+- **Safe around city founding**: cities keep their vanilla glyphs, pins and cursor, and any
+  settlement tail is released when a city session starts.
 - **Configurable counts and range**, no external data files required.
 
 The advisor only makes recommendations. Normal placement rules still apply.
@@ -52,11 +52,11 @@ Typical plugin locations:
 
 ## Usage
 
-1. Select an army and start **camp placement**.
+1. Select an army and start **settlement placement**.
 2. Hover over a territory. Recommended tiles in the hovered territory and in nearby territories
    are marked with stars.
 3. Check the FIMS pins to compare the candidates.
-4. Place the camp on the tile you prefer. The advisor does not restrict your choice.
+4. Place the settlement on the tile you prefer. The advisor does not restrict your choice.
 
 The default rules are:
 
@@ -91,8 +91,8 @@ visual highlight on top of the configured count.
 
 ## How it works
 
-The mod hooks the game's camp placement evaluation after vanilla refreshes the cursor position.
-It then:
+The mod hooks the game's settlement placement evaluation after vanilla refreshes the cursor
+position. It then:
 
 1. Walks the hovered territory and its land-adjacent neighbours.
 2. Evaluates candidate tiles with the game's own settlement evaluation.
@@ -125,10 +125,10 @@ Search for `SettlementPlacementAdvisor`.
 
 | Symptom | Check |
 |---|---|
-| No stars at all | Is the plugin loaded? Are you in camp placement, not city founding? |
+| No stars at all | Is the plugin loaded? Are you in settlement placement, not city founding? |
 | A territory has no stars | Tiles must be explored, unowned and land; ocean territories are skipped |
 | `Disabled, unresolved game members` | The game build changed; report the log and game version in an issue |
-| Nothing appears until the cursor moves | The mod wires star rendering on the first camp placement refresh |
+| Nothing appears until the cursor moves | The mod wires star rendering on the first settlement placement refresh |
 
 Under Proton, early `Awake`-path exceptions appear in the prefix's `Player.log` rather than
 `LogOutput.log`.
@@ -171,7 +171,7 @@ Bug reports and pull requests are welcome. Please include:
 
 - The game version.
 - The relevant `LogOutput.log` excerpt.
-- Whether the issue happens during camp placement or city founding.
+- Whether the issue happens during settlement placement or city founding.
 - A clear description of the expected and actual recommendations.
 
 Commits follow the Conventional Commits format enforced by `scripts/hooks/commit-msg`; see

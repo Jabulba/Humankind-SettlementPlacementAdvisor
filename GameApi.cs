@@ -28,7 +28,7 @@ namespace SettlementPlacementAdvisor
         private static FieldInfo s_RepositoryField;
         private static FieldInfo s_WorldField;
         private static FieldInfo s_VisibilityField;
-        private static FieldInfo s_CampDefinitionField;
+        private static FieldInfo s_SettlementDefinitionField;
         private static FieldInfo s_PonderationField;
         private static MethodInfo s_EvaluateOne;
         private static MethodInfo s_TryGetArmy;
@@ -94,8 +94,8 @@ namespace SettlementPlacementAdvisor
                 }
 
                 var departmentType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.DepartmentOfTheInterior");
-                s_CampDefinitionField = departmentType == null ? null : AccessTools.Field(departmentType, "CampDefinition");
-                if (s_CampDefinitionField == null) failures.Add("DepartmentOfTheInterior.CampDefinition");
+                s_SettlementDefinitionField = departmentType == null ? null : AccessTools.Field(departmentType, "CampDefinition");
+                if (s_SettlementDefinitionField == null) failures.Add("DepartmentOfTheInterior.CampDefinition");
 
                 var helperType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.ConstructibleHelper");
                 var districtDefinitionType = AccessTools.TypeByName("Amplitude.Mercury.Data.Simulation.DistrictDefinition");
@@ -119,13 +119,13 @@ namespace SettlementPlacementAdvisor
             ResolveError = string.Join("; ", failures);
         }
 
-        public bool IsCampableTile(int tileIndex)
+        public bool IsSettlementSiteTile(int tileIndex)
         {
             try
             {
-                var campDefinition = s_CampDefinitionField.GetValue(null);
-                if (campDefinition == null) return false;
-                return (bool)s_CheckTerrainAndPoi.Invoke(null, new object[] { campDefinition, tileIndex });
+                var settlementDefinition = s_SettlementDefinitionField.GetValue(null);
+                if (settlementDefinition == null) return false;
+                return (bool)s_CheckTerrainAndPoi.Invoke(null, new object[] { settlementDefinition, tileIndex });
             }
             catch (Exception e)
             {
@@ -159,12 +159,12 @@ namespace SettlementPlacementAdvisor
             try
             {
                 var evaluator = s_EvaluatorField.GetValue(null);
-                var campDefinition = s_CampDefinitionField.GetValue(null);
-                if (evaluator == null || campDefinition == null) return false;
+                var settlementDefinition = s_SettlementDefinitionField.GetValue(null);
+                if (evaluator == null || settlementDefinition == null) return false;
 
                 var vt = default(DistrictPlacementEvaluation.ValidTile);
                 vt.Initialize(tileIndex);
-                var args = new object[] { army, vt, tileIndex, campDefinition, null };
+                var args = new object[] { army, vt, tileIndex, settlementDefinition, null };
                 s_EvaluateOne.Invoke(evaluator, args);
                 vt = (DistrictPlacementEvaluation.ValidTile)args[1];
 
@@ -185,7 +185,7 @@ namespace SettlementPlacementAdvisor
 
         /// <summary>
         /// Fail-open on reflection issues. Exploration is monotonic, so a cached pick is only
-        /// invalidated by VisibilityFrame when new scouting occurs during a camp session.
+        /// invalidated by VisibilityFrame when new scouting occurs during a settlement session.
         /// </summary>
         public bool IsTileExplored(int tileIndex, int empireIndex)
         {

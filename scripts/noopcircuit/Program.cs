@@ -8,7 +8,7 @@ using Amplitude.Mercury.Simulation;
 using SettlementPlacementAdvisor;
 
 /// <summary>
-/// Synthetic surface: four territories of three camp-site tiles, scored by tile index, so a
+/// Synthetic surface: four territories of three settlement-site tiles, scored by tile index, so a
 /// territory's best tiles are its last two. No game or sandbox involved.
 /// </summary>
 internal sealed class GraphSurface : GameSurface
@@ -18,7 +18,7 @@ internal sealed class GraphSurface : GameSurface
     public bool Ready { get { return ReadyFlag; } }
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
     public int GetArmyEmpireIndex(object army) { return 0; }
-    public bool IsCampableTile(int tileIndex) { return true; }
+    public bool IsSettlementSiteTile(int tileIndex) { return true; }
     public bool IsTileExplored(int tileIndex, int empireIndex) { return true; }
 
     public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
@@ -69,7 +69,7 @@ internal sealed class CountingCanvas : PickCanvas
 /// DEBUG [noopc] no-op contract harness. All three settle types share
 /// CampPlacementEvaluation, so a city session must see zero writes. Checks compare a full
 /// signature of the mutable state before and after, catching any mutation, not just known
-/// ones. Camp placement is the control: tail reserved, picks written, vanilla glyphs
+/// ones. Settlement placement is the control: tail reserved, picks written, vanilla glyphs
 /// suppressed. The pin gate is driven through the real postfix.
 /// </summary>
 internal static class Program
@@ -128,10 +128,10 @@ internal static class Program
         return sb.ToString();
     }
 
-    /// <summary>Drive the real camp-evaluation postfix (the advisor's entry point per refresh).</summary>
+    /// <summary>Drive the real settlement-evaluation postfix (the advisor's entry point per refresh).</summary>
     private static void Refresh(CampPlacementEvaluation eval, int cursorTile)
     {
-        var postfix = typeof(CampEvaluationPatch).GetMethod("Postfix", BindingFlags.NonPublic | BindingFlags.Static);
+        var postfix = typeof(SettlementEvaluationPatch).GetMethod("Postfix", BindingFlags.NonPublic | BindingFlags.Static);
         postfix.Invoke(null, new object[] { eval, cursorTile, new SimulationEntityGUID(1UL) });
     }
 
@@ -206,28 +206,28 @@ internal static class Program
         plugin.Writer.ClearTail(settler);
         Check("FoundCityWithSettler: zero writes", Signature(settler) == settlerClean);
 
-        // B. Camp control: the advisor's own session must behave exactly as before.
-        var camp = NewEvaluation(ArmyActionType.CreateCamp, baseline);
-        plugin.Writer.NoteActivation(camp);
+        // B. Settlement control: the advisor's own session must behave exactly as before.
+        var settlement = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(settlement);
         Check("CreateCamp activation reserves the tail window",
-            camp.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity);
+            settlement.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity);
 
-        Refresh(camp, 131); // cursor tile inside the synthetic territory space (territory 3)
+        Refresh(settlement, 131); // cursor tile inside the synthetic territory space (territory 3)
         var tiles = PickSet.Current.Tiles;
         int inTail = 0;
-        for (int i = baseline + 1; i < camp.ValidTileCount; i++)
+        for (int i = baseline + 1; i < settlement.ValidTileCount; i++)
             for (int t = 0; t < tiles.Length; t++)
-                if (camp.ValidTiles[i].TileIndex == tiles[t]) inTail++;
+                if (settlement.ValidTiles[i].TileIndex == tiles[t]) inTail++;
         bool glyphsSuppressed = true;
         for (int i = 0; i < baseline; i++)
-            if (camp.ValidTiles[i].Showable) glyphsSuppressed = false;
+            if (settlement.ValidTiles[i].Showable) glyphsSuppressed = false;
 
         Check("CreateCamp refresh publishes ascending unique tiles", AscendingUnique(tiles));
         Check("CreateCamp refresh writes every pick into its tail slot",
-            camp.ValidTileCount > baseline + 1 && inTail == tiles.Length);
+            settlement.ValidTileCount > baseline + 1 && inTail == tiles.Length);
         Check("CreateCamp refresh suppresses the vanilla glyphs", glyphsSuppressed);
         plugin.Stars.Render(PickSet.Current);
-        Check("camp pick set starts one star per pick", canvas.Started == tiles.Length);
+        Check("settlement pick set starts one star per pick", canvas.Started == tiles.Length);
 
         // C. Pin gate through the real postfix, with a snapshot that reports a vanilla best tile.
         var snapshot = CreateSnapshot();
@@ -242,7 +242,7 @@ internal static class Program
         canvas.Started = 0;
         canvas.Stopped = 0;
         plugin.Stars.Render(PickSet.Current);
-        Check("camp pick set re-render is version-gated (no fx churn)", canvas.Started == 0);
+        Check("settlement pick set re-render is version-gated (no fx churn)", canvas.Started == 0);
         plugin.Advisor.Deactivate();
         plugin.Stars.Render(PickSet.Current);
         Check("deactivation stops every tracked star", canvas.Stopped == tiles.Length && canvas.Started == 0);
@@ -264,28 +264,28 @@ internal static class Program
         surface.ReadyFlag = false;
         Refresh(city, 5003);
         Check("not-ready city refresh: zero writes, pick set inactive", Signature(city) == clean && Inactive());
-        var campBeforeNotReady = Signature(camp);
-        Refresh(camp, 131);
-        Check("not-ready camp refresh: zero writes, pick set inactive",
-            Signature(camp) == campBeforeNotReady && Inactive());
+        var settlementBeforeNotReady = Signature(settlement);
+        Refresh(settlement, 131);
+        Check("not-ready settlement refresh: zero writes, pick set inactive",
+            Signature(settlement) == settlementBeforeNotReady && Inactive());
         surface.ReadyFlag = true;
 
-        // E. Mode switch on the shared evaluation: a city activation must inherit no camp state.
+        // E. Mode switch on the shared evaluation: a city activation must inherit no settlement state.
         // Vanilla Initialize only lowers ValidTileCount, so the grown array and the written tail
-        // slots of the camp session are exactly what the city session then scores: the advisor
+        // slots of the settlement session are exactly what the city session then scores: the advisor
         // has to release them. Its own slots (>= baseline) are checked separately from
         // vanilla's ([0, baseline)), which must stay untouched.
-        camp.SettleType = ArmyActionType.FoundCity;
-        camp.ValidTileCount = baseline; // what vanilla's Initialize does on the city activation
-        var vanillaSlots = VanillaSlots(camp, baseline);
-        plugin.Writer.NoteActivation(camp);
+        settlement.SettleType = ArmyActionType.FoundCity;
+        settlement.ValidTileCount = baseline; // what vanilla's Initialize does on the city activation
+        var vanillaSlots = VanillaSlots(settlement, baseline);
+        plugin.Writer.NoteActivation(settlement);
         bool tailReleased = true;
-        for (int i = baseline + 1; i < camp.ValidTiles.Length; i++)
-            if (camp.ValidTiles[i].TileIndex != -1) tailReleased = false;
-        Refresh(camp, 131);
-        Check("city activation on the shared array releases the camp tail", tailReleased);
+        for (int i = baseline + 1; i < settlement.ValidTiles.Length; i++)
+            if (settlement.ValidTiles[i].TileIndex != -1) tailReleased = false;
+        Refresh(settlement, 131);
+        Check("city activation on the shared array releases the settlement tail", tailReleased);
         Check("city activation on the shared array leaves vanilla's slots alone",
-            VanillaSlots(camp, baseline) == vanillaSlots && Inactive());
+            VanillaSlots(settlement, baseline) == vanillaSlots && Inactive());
 
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
         return s_Failures == 0 ? 0 : 1;

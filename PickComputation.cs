@@ -207,7 +207,7 @@ namespace SettlementPlacementAdvisor
                     m_Budget--;
 
                     var tile = tiles[i];
-                    if (!m_Game.IsCampableTile(tile)) continue;
+                    if (!m_Game.IsSettlementSiteTile(tile)) continue;
                     if (!m_Game.IsTileExplored(tile, empireIndex)) continue;
                     DistrictPlacementEvaluation.ValidTile validTile;
                     FixedPoint score;
@@ -221,7 +221,7 @@ namespace SettlementPlacementAdvisor
             }
 
             // Truncated (budget-starved) results are not cached: frames are static during a
-            // camp session, so a cached partial result would hide picks indefinitely.
+            // settlement session, so a cached partial result would hide picks indefinitely.
             if (!truncated)
             {
                 m_Cache[territoryIndex] = new CacheEntry

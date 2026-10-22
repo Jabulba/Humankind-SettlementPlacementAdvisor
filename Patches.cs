@@ -11,7 +11,7 @@ namespace SettlementPlacementAdvisor
     /// its pick set. Failures only deactivate that set; they never write the evaluation.
     /// </summary>
     [HarmonyPatch]
-    internal static class CampEvaluationPatch
+    internal static class SettlementEvaluationPatch
     {
         private static MethodBase TargetMethod()
         {

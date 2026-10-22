@@ -7,7 +7,7 @@ namespace SettlementPlacementAdvisor
     /// <summary>
     /// Simulation-thread orchestration from the vanilla placement refresh to a published pick
     /// set. It owns no rule logic or evaluation writes, and is a strict no-op on every
-    /// evaluation it does not own: non-camp modes only deactivate the advisor's pick set.
+    /// evaluation it does not own: non-settlement modes only deactivate the advisor's pick set.
     /// </summary>
     internal sealed class Advisor
     {
@@ -28,7 +28,7 @@ namespace SettlementPlacementAdvisor
         {
             // FoundCity and FoundCityWithSettler share this evaluation type, and vanilla
             // displays its glyphs from ValidTiles[0..ValidTileCount), so writing here would
-            // restyle city placement. Non-camp modes may only deactivate our pick set.
+            // restyle city placement. Non-settlement modes may only deactivate our pick set.
             if (!m_Game.Ready || evaluation.SettleType != ArmyActionType.CreateCamp)
             {
                 Deactivate();
@@ -71,8 +71,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Publish an inactive pick set without touching the evaluation. Used by every non-camp
-        /// mode and failure path; republishing an inactive set is a no-op.
+        /// Publish an inactive pick set without touching the evaluation. Used by every
+        /// non-settlement mode and failure path; republishing an inactive set is a no-op.
         /// </summary>
         public void Deactivate()
         {
@@ -80,7 +80,7 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Camp placement only: drop the advisor's tail contribution, then deactivate.
+        /// Settlement placement only: drop the advisor's tail contribution, then deactivate.
         /// </summary>
         public void PublishEmpty(CampPlacementEvaluation evaluation)
         {

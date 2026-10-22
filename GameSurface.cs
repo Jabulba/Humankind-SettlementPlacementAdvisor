@@ -6,7 +6,7 @@ namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// All game facts the advisor needs, as one seam over GameApi. Failure semantics are part
-    /// of the contract: IsCampableTile and territory facts fail closed, IsTileExplored fails
+    /// of the contract: IsSettlementSiteTile and territory facts fail closed, IsTileExplored fails
     /// open, TryGetArmy returns null, and frame counters return false. Rule modules never touch
     /// the game's AI snapshot globals directly.
     /// </summary>
@@ -21,8 +21,8 @@ namespace SettlementPlacementAdvisor
         /// <summary>Owning empire of an army entity, -1 when the army is null.</summary>
         int GetArmyEmpireIndex(object army);
 
-        /// <summary>Land + point-of-interest validity for a camp site on the tile (sim thread).</summary>
-        bool IsCampableTile(int tileIndex);
+        /// <summary>Land + point-of-interest validity for a settlement site on the tile (sim thread).</summary>
+        bool IsSettlementSiteTile(int tileIndex);
 
         /// <summary>Tile scouted by the given empire (cache invalidation via VisibilityFrame).</summary>
         bool IsTileExplored(int tileIndex, int empireIndex);
@@ -41,7 +41,7 @@ namespace SettlementPlacementAdvisor
         int TerritoryOfTile(int tileIndex);
 
         /// <summary>
-        /// Territory facts (sim thread): ocean flag, claimed flag, camp-site tiles. False =
+        /// Territory facts (sim thread): ocean flag, claimed flag, settlement-site tiles. False =
         /// territory unknown (fail closed: never advise an unknown territory). The tiles view
         /// belongs to the snapshot: read-only, valid for the current refresh, not a retention.
         /// </summary>

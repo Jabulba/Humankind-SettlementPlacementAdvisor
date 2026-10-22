@@ -7,10 +7,10 @@ the domain and the modules at its seams.
 ## Domain
 
 - **Placement mode**: the settlement action a session is running (`ArmyActionType`):
-  `CreateCamp` for camp/outpost placement, `FoundCity` and `FoundCityWithSettler` for city
+  `CreateCamp` for settlement placement, `FoundCity` and `FoundCityWithSettler` for city
   founding. All three share `CampPlacementEvaluation`, so the advisor's patch sees city
-  sessions too. Contract: camp placement is the only mode it writes; every other mode is a
-  strict no-op that hands its pin gate back to vanilla. A camp tail left on the shared
+  sessions too. Contract: settlement placement is the only mode it writes; every other mode is a
+  strict no-op that hands its pin gate back to vanilla. A settlement tail left on the shared
   evaluation is released on the next city activation (see Tail).
 - **Refresh**: one pass of the placement snapshot sync: vanilla full eval (only at
   activation / district change) and `UpdateCurrentPosition` (every mouse move). The advisor
@@ -51,8 +51,8 @@ the domain and the modules at its seams.
   cache (frames read from the game surface at compute time, never threaded by callers),
   the evaluation budget, count clamping, ranking, and truncation. No side effects.
 - **Game surface** (`GameSurface`): the seam over the game's internals: tile
-  campability, exploration, per-tile placement evaluation, frame counters, army lookup,
-  and the territory graph (territory of a tile, ocean/claimed flags, camp-site tiles,
+  settlement capability, exploration, per-tile placement evaluation, frame counters, army lookup,
+  and the territory graph (territory of a tile, ocean/claimed flags, settlement-site tiles,
   land adjacencies). The adapter (`GameApi`) satisfies it in the game: reflection for the
   simulation internals, the public AI snapshot for the territory graph (its land filter
   keeps the `Open` transition edges). Territory facts fail closed: an unknown territory
@@ -60,7 +60,7 @@ the domain and the modules at its seams.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
   evaluation. Writes pick slots in place, barriers, then raises `ValidTileCount`; owns
   `CurrentPositionIndex` when the cursor tile is a pick. Reserves tail capacity at
-  activation and suppresses vanilla glyphs. Camp placement writes only: the mutating entry
+  activation and suppresses vanilla glyphs. Settlement placement writes only: the mutating entry
   point guards on `SettleType`, and city activation only releases the advisor's own slots.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
