@@ -6,3 +6,7 @@ reference/
 
 # JetBrains IDE state: per-machine, never shared.
 .idea/
+
+# User-scope IDE/MSBuild artifacts.
+*.DotSettings.user
+*.csproj.user
