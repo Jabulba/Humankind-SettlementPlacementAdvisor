@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Reject commit messages that violate the standard in CONTRIBUTING.md.
+# Setup (per clone): git config core.hooksPath scripts/hooks
+set -u
+
+file="$1"
+
+# Git comments and trailing whitespace out; first non-blank line is the subject.
+clean=$(mktemp)
+grep -v '^#' "$file" | sed 's/[[:space:]]*$//' > "$clean"
+subject=$(awk 'NF{print; exit}' "$clean")
+
+TYPES='feat|fix|refactor|docs|test|build|ci|chore|revert'
+SCOPES='advisor|picks|gameapi|evaluation|stars|harness'
+LIMIT=72
+
+fail() {
+    printf 'commit-msg: %s\n\n  subject: %s\n' "$1" "$subject" >&2
+    if [ "$#" -gt 1 ]; then
+        printf '\n  types: %s\n  scopes (optional): %s\n' "${TYPES//|/ }" "${SCOPES//|/ }" >&2
+    fi
+    printf '\n  see CONTRIBUTING.md\n' >&2
+    rm -f "$clean"
+    exit 1
+}
+
+[ -n "$subject" ] || fail "empty subject"
+
+printf '%s' "$subject" | grep -Eq "^(${TYPES})(\((${SCOPES})\))?(!)?: [^ ].*" \
+    || fail "subject must be '<type>[(<scope>)][!]: <imperative subject>' with an allowed type/scope, lowercase type, no trailing period" "list"
+
+[ "${#subject}" -le "$LIMIT" ] \
+    || fail "subject is ${#subject} chars; max is $LIMIT (target 50)"
+
+type=$(printf '%s' "$subject" | sed -E 's/^([a-z]+).*/\1/')
+if [ "$type" = fix ]; then
+    body=$(awk -v s="$subject" '$0==s{f=1;next} f&&NF{print;exit}' "$clean")
+    [ -n "$body" ] || fail "fix requires a body: Cause / Fix / Ruled out / Verification"
+fi
+
+rm -f "$clean"
+exit 0

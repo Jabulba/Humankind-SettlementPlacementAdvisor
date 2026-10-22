@@ -12,7 +12,7 @@ counts that ignore the vanilla minimum-FIMS gate, exploration filtering, and no 
 - `scripts/test-range.sh` — range-rule harness (`scripts/rangecircuit`), non-zero exit on a range violation
 - `scripts/decompile-game.sh` — decompile cache under `reference/` (gitignored, never committed); `<FullyQualifiedTypeName>` prints one type
 - `Directory.Build.props` — assembly references resolve from HintPaths and the target-framework directory only, never from copies inside the tree
-- `LICENSE` — MIT
+- `CONTRIBUTING.md` — commit message standard, MinVer versioning, git-cliff release notes
 
 ## Build & deploy
 
@@ -20,6 +20,7 @@ counts that ignore the vanilla minimum-FIMS gate, exploration filtering, and no 
 
 Requires the dotnet SDK at `~/.dotnet` (script sets `DOTNET_ROOT`/`PATH`). Game install path is set by `GameDir` in the
 csproj (override with `-p:GameDir=...`). BepInEx only loads plugins at process start: after a rebuild, restart the game.
+Per clone once: `git config core.hooksPath scripts/hooks` and `git config commit.template .gitmessage`.
 
 Config: `BepInEx/config/com.jabulba.campplacementadvisor.cfg` (`TopHovered=2`, `TopNeighbour=1`,
 `RangeLevels=2`: center counts as level 1, so 2 = hovered + adjacent, 3 adds adjacent-to-adjacent. Land adjacency only:

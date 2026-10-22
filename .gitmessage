@@ -1,0 +1,7 @@
+# <type>[(<scope>)][!]: imperative subject, lowercase, <= 50 target, 72 hard, no period
+# types:  feat fix refactor docs test build ci chore revert
+# scopes: advisor picks gameapi evaluation stars harness (optional; Plugin.cs, docs,
+#         LICENSE, .gitignore and build plumbing are scopeless)
+# fix requires a body: Cause / Fix / Ruled out / Verification; other bodies optional
+# wrap body at 72; breaking change: '!' before ':' and/or a BREAKING CHANGE: footer
+# no attribution trailers; release notes come from git-cliff reading these messages
