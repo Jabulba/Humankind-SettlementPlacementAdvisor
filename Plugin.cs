@@ -47,7 +47,7 @@ namespace CampPlacementAdvisor
             CfgTopNeighbour = Config.Bind("Advisor", "TopNeighbour", 1,
                 "Recommended tiles shown on every other territory in range; count is mandatory.");
             CfgRangeLevels = Config.Bind("Advisor", "RangeLevels", 2,
-                "Adjacency range from the hovered territory, center counts as 1: 3 = hovered + adjacent + adjacent-to-adjacent.");
+                "Adjacency range from the hovered territory, center counts as 1: 3 = hovered + adjacent + adjacent-to-adjacent. Land adjacency only: sea, cliff and mountain edges never count as a range step.");
 
             GameApi.Resolve();
             if (!GameApi.ReadyStatic)

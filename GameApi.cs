@@ -4,7 +4,9 @@ using System.Reflection;
 using Amplitude; // FixedPoint lives in namespace Amplitude (assembly Amplitude.Framework.dll).
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation; // SimulationEntityGUID
+using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency (the snapshot's territory edges)
 using AiSnapshots = Amplitude.Mercury.Interop.AI.Snapshots; // public AI snapshot: territory graph
+using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition; // edge transition flags
 using HarmonyLib;
 
 namespace CampPlacementAdvisor
@@ -289,26 +291,47 @@ namespace CampPlacementAdvisor
             }
         }
 
-        /// <summary>Adjacent territory indexes, empty when unknown. Fresh array the caller may keep.</summary>
-        public int[] AdjacentTerritories(int territoryIndex)
+        /// <summary>
+        /// Land-adjacent territory indexes from the public AI snapshot: the edges a ground
+        /// army crosses (TerritoryTransition.Open). Coast/shallow/deep water edges lead to
+        /// sea territories and would jump the advisor range across water; cliffs, mountains
+        /// and closed edges are not passable. Empty when unknown. Fresh array the caller
+        /// may keep.
+        /// </summary>
+        public int[] LandAdjacentTerritories(int territoryIndex)
         {
             try
             {
                 var world = AiSnapshots.World;
                 var territories = world == null ? null : world.Territories;
                 if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length) return s_NoTiles;
-                var adjacencies = territories[territoryIndex].Adjacencies;
-                if (adjacencies == null) return s_NoTiles;
-                var indexes = new int[adjacencies.Length];
-                for (int i = 0; i < adjacencies.Length; i++)
-                    indexes[i] = adjacencies[i].TerritoryIndex;
-                return indexes;
+                return LandAdjacentIndexes(territories[territoryIndex].Adjacencies);
             }
             catch (Exception e)
             {
                 Fail("territory adjacencies: " + e.Message);
                 return s_NoTiles;
             }
+        }
+
+        /// <summary>
+        /// The land filter, as data in / indexes out so the harness can drive it directly:
+        /// keeps only the Open-transition edges, in snapshot order.
+        /// </summary>
+        internal static int[] LandAdjacentIndexes(Territory.Adjacency[] adjacencies)
+        {
+            if (adjacencies == null) return s_NoTiles;
+            var indexes = new int[adjacencies.Length];
+            int count = 0;
+            for (int i = 0; i < adjacencies.Length; i++)
+            {
+                if ((adjacencies[i].Transition & TerritoryTransition.Open) == TerritoryTransition.None) continue;
+                indexes[count++] = adjacencies[i].TerritoryIndex;
+            }
+            if (count == indexes.Length) return indexes;
+            var trimmed = new int[count];
+            Array.Copy(indexes, trimmed, count);
+            return trimmed;
         }
 
         /// <summary>Log each distinct advisor failure once.</summary>

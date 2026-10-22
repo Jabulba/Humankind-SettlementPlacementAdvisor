@@ -120,8 +120,10 @@ namespace CampPlacementAdvisor
         }
 
         /// <summary>
-        /// Territories in range excluding the center: center counts as level 1, so
-        /// rangeLevels = 3 adds all adjacent, then all adjacent-to-adjacent.
+        /// Territories in range excluding the center, over LAND adjacency only: center
+        /// counts as level 1, so rangeLevels = 3 adds all land-adjacent, then all
+        /// adjacent-to-adjacent. Sea, cliff, mountain and closed edges never count as a
+        /// step (the game's adjacency array carries them all; GameApi filters them).
         /// Capped at MaxRangeTerritories so the tail stays bounded.
         /// </summary>
         private void CollectRangeTerritories(int hoveredTerritory, int rangeLevels)
@@ -164,7 +166,7 @@ namespace CampPlacementAdvisor
 
         private void AddAdjacent(int territoryIndex, List<int> output)
         {
-            var adjacent = m_Game.AdjacentTerritories(territoryIndex);
+            var adjacent = m_Game.LandAdjacentTerritories(territoryIndex);
             for (int i = 0; i < adjacent.Length; i++)
             {
                 if (m_SeenTerritories.Add(adjacent[i]))

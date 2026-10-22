@@ -11,8 +11,11 @@ names the domain and the modules at its seams.
   hooks `UpdateCurrentPosition`, so a refresh means "the cursor position was processed".
 - **Hovered territory**: the territory owning the tile under the placement cursor. Level 1
   of the range.
-- **Range territories**: territories in the adjacency range of the hovered territory
-  (`RangeLevels`, center counts as 1). The hovered territory is never a range territory.
+- **Range territories**: territories reachable from the hovered territory in the
+  adjacency range (`RangeLevels`, center counts as 1), stepping over LAND edges only:
+  the game's territory adjacency array also carries sea, cliff, mountain and closed
+  edges, and those never count as a range step. The hovered territory is never a range
+  territory.
 - **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
   placement data the FIMS pins read.
 - **Cursor context**: the pick computation's full input for one refresh: hovered
@@ -42,9 +45,10 @@ names the domain and the modules at its seams.
 - **Game surface** (`GameSurface`): the seam over the game's internals: tile
   campability, exploration, per-tile placement evaluation, frame counters, army lookup,
   and the territory graph (territory of a tile, ocean/claimed flags, camp-site tiles,
-  adjacencies). The adapter (`GameApi`) satisfies it in the game: reflection for the
-  simulation internals, the public AI snapshot for the territory graph. Territory facts
-  fail closed: an unknown territory never advises.
+  land adjacencies). The adapter (`GameApi`) satisfies it in the game: reflection for the
+  simulation internals, the public AI snapshot for the territory graph (its land filter
+  keeps the `Open` transition edges). Territory facts fail closed: an unknown territory
+  never advises.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
   evaluation. Tail protocol: write the pick slots in place, barrier, raise
   `ValidTileCount`; own `CurrentPositionIndex` when the cursor tile is one of the picks.

@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- DEBUG HARNESS (throwaway): drives the real PickComputation over a synthetic territory
+       graph and asserts every pick comes from a territory within the configured range.
+       Not part of the mod build (the mod csproj excludes scripts/**). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Rangecircuit</AssemblyName>
+    <RootNamespace>Rangecircuit</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0436;CS0618;MSB3277;CS0649</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == ''">/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind</GameDir>
+    <GameManagedDir>$(GameDir)/Humankind_Data/Managed</GameManagedDir>
+    <BepInExCoreDir>$(GameDir)/BepInEx/core</BepInExCoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="PluginShim.cs" />
+    <Compile Include="..\..\PickComputation.cs" />
+    <Compile Include="..\..\GameSurface.cs" />
+    <Compile Include="..\..\GameApi.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Amplitude.Mercury.Firstpass"><HintPath>$(GameManagedDir)/Amplitude.Mercury.Firstpass.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="Amplitude.Mercury.Data"><HintPath>$(GameManagedDir)/Amplitude.Mercury.Data.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="Amplitude"><HintPath>$(GameManagedDir)/Amplitude.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="Amplitude.Core"><HintPath>$(GameManagedDir)/Amplitude.Core.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="Amplitude.Framework"><HintPath>$(GameManagedDir)/Amplitude.Framework.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCoreDir)/0Harmony.dll</HintPath><Private>true</Private></Reference>
+  </ItemGroup>
+
+</Project>

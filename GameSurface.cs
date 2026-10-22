@@ -50,7 +50,11 @@ namespace CampPlacementAdvisor
         /// </summary>
         bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles);
 
-        /// <summary>Adjacent territory indexes, empty when unknown. Fresh array the caller may keep.</summary>
-        int[] AdjacentTerritories(int territoryIndex);
+        /// <summary>
+        /// Land-adjacent territory indexes: only the edges a ground army crosses
+        /// (TerritoryTransition.Open). Water, cliff, mountain and closed edges never
+        /// count as a range step. Empty when unknown. Fresh array the caller may keep.
+        /// </summary>
+        int[] LandAdjacentTerritories(int territoryIndex);
     }
 }
