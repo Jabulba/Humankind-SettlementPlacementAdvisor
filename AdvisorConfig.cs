@@ -3,12 +3,9 @@ using BepInEx.Configuration;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// THE ADVISOR CONFIG: the three advisor knobs (see Plugin). THE BINDS HERE
-    /// ARE THE SINGLE SOURCE for the plugin's live config (BaseUnityPlugin.Config)
-    /// AND for the pre-generated cfg shipped in releases (scripts/cfggen):
-    /// defaults and descriptions are generated from this call set, never copied.
-    /// Unity-free by design: scripts/cfggen compiles this file headless.
-    /// BepInEx 5 has no Config class: the type is ConfigFile.
+    /// Single source for the live plugin config and the pre-generated release cfg
+    /// (scripts/cfggen), so defaults and descriptions are never copied. Unity-free by design.
+    /// BepInEx 5 names the config type ConfigFile, not Config.
     /// </summary>
     internal static class AdvisorConfig
     {

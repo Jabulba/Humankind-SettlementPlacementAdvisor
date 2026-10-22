@@ -7,11 +7,8 @@ using HarmonyLib;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Patch 1 (simulation thread): after the vanilla placement evaluation and current-position
-    /// update, compute the advisor picks, hand them to the evaluation writer, and publish the
-    /// pick set. The evaluation writer owns the ValidTiles tail and the vanilla glyph
-    /// suppression, and the advisor keeps both strictly inside camp placement: on a non-camp
-    /// evaluation, and on any failure, the postfix only deactivates our own pick set.
+    /// Simulation thread: after vanilla's current-position update, run the advisor and publish
+    /// its pick set. Failures only deactivate that set; they never write the evaluation.
     /// </summary>
     [HarmonyPatch]
     internal static class CampEvaluationPatch
@@ -36,12 +33,9 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Patch 4 (simulation thread): the camp placement evaluation finished its activation
-    /// (Initialize), so the vanilla valid positions are final. The evaluation writer records
-    /// the baseline count and reserves the tail capacity exactly once, in the only window
-    /// where growing the array is safe (before the cursor starts refreshing). Initialize is
-    /// shared with FoundCity/FoundCityWithSettler, so the writer guards the reservation to
-    /// camp activations: a city placement gets no resize and no tail.
+    /// Simulation thread: after Initialize, vanilla's valid positions are final. This is the
+    /// only safe window to reserve the writer's tail before the cursor starts refreshing.
+    /// Initialize is shared with city founding, which the writer ignores.
     /// </summary>
     [HarmonyPatch]
     internal static class EvaluationActivationPatch
@@ -62,9 +56,8 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Patch 3 (presentation thread): clear advisor stars when the camp placement cursor
-    /// deactivates (mode exit / cursor switch), mirroring the vanilla tileFeedbacks.Clear().
-    /// The star renderer stops every fx it tracks and forgets the rendered version.
+    /// Presentation thread: clear advisor stars on cursor deactivation (mode exit or cursor
+    /// switch), mirroring vanilla's tile-feedback clear.
     /// </summary>
     [HarmonyPatch]
     internal static class CursorDeactivatePatch
@@ -81,14 +74,10 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Patch 2 (presentation thread): membership-only FIMS-pin gate. Pins show on every
-    /// advisor pick in the published pick set; vanilla top-2 pins outside the set are
-    /// suppressed. An INACTIVE pick set hands the gate back to vanilla: both representations
-    /// count (null instance, and the instance the advisor publishes when it deactivates,
-    /// Tiles == null), so city placement and every advisor-inactive refresh keep the vanilla
-    /// pin answer. Membership queries the captured snapshot instance, so the gate result is
-    /// stable while the pick set content is stable (no per-mouse-move show/hide flips). The
-    /// hovered cursor tile keeps its vanilla pin behavior.
+    /// Presentation thread: FIMS-pin gate. Show pins on advisor picks and suppress vanilla
+    /// top-2 pins outside the set. An inactive set (null, or Tiles == null) keeps vanilla's
+    /// answer, so city placement and inactive refreshes are untouched. Membership is answered
+    /// from the captured snapshot, so pins do not flip per mouse move.
     /// </summary>
     [HarmonyPatch]
     internal static class SettlementPinsPatch

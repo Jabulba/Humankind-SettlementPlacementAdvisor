@@ -5,10 +5,8 @@ using BepInEx.Configuration;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// DEBUG-harness stand-in for the BepInEx plugin class: the advisor modules reach
-    /// Plugin.Instance and the three config entries. The binds go through the production
-    /// AdvisorConfig call set (the same seam scripts/cfggen uses), so the harness runs on
-    /// the shipped defaults, and no game is involved.
+    /// DEBUG-harness stand-in for Plugin. Config binds go through production AdvisorConfig, so
+    /// the harness runs on shipped defaults with no game involved.
     /// </summary>
     internal sealed class Plugin
     {

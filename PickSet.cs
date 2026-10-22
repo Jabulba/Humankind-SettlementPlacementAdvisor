@@ -3,11 +3,10 @@ using System;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// THE PUBLISHED PICK SET: an immutable snapshot of the tiles the advisor selected for the
-    /// current cursor context, carrying its own entering/leaving diff against the previous pick
-    /// set. THE ONLY cross-thread channel: built on the simulation thread, read by the star
-    /// renderer and the pin gate on the presentation thread. Readers capture PickSet.Current
-    /// ONCE per pass and answer every membership question from that capture.
+    /// Immutable snapshot of the advisor's selected tiles, with the entering/leaving diff
+    /// against the previous snapshot. The only cross-thread channel: built on the simulation
+    /// thread, read by the star renderer and pin gate on the presentation thread. Readers
+    /// capture PickSet.Current once per pass and answer every membership question from it.
     /// </summary>
     internal sealed class PickSet
     {
@@ -28,8 +27,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Membership in THIS snapshot instance (binary search over Tiles). Callers capture
-        /// PickSet.Current once; this never re-reads the volatile field, so a pass cannot tear.
+        /// Membership in this snapshot (binary search). Never re-reads PickSet.Current, so a
+        /// captured instance cannot tear mid-pass.
         /// </summary>
         public bool Contains(int tileIndex)
         {
@@ -53,10 +52,9 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Publish a pick set: ascending unique tile indices, or null for inactive (simulation
-        /// thread). Content-identical republish is a no-op, so moving the mouse inside a territory
-        /// publishes nothing and churns no fx. The entering/leaving diff is computed here, at the
-        /// seam, so no consumer recomputes membership.
+        /// Publish ascending unique tiles, or null for inactive (simulation thread). A
+        /// content-identical republish is a no-op, so mouse movement inside a territory churns
+        /// no fx. The entering/leaving diff is computed here so no consumer recomputes it.
         /// </summary>
         public static void Publish(int[] tiles)
         {

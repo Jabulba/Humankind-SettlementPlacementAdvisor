@@ -8,9 +8,8 @@ using Amplitude.Mercury.Simulation;
 using SettlementPlacementAdvisor;
 
 /// <summary>
-/// Synthetic game surface: 4 territories x 3 camp-site tiles, score = tile index, so a
-/// territory's best tiles are its last two. Every advisor fact is answered through the
-/// production GameSurface seam; no game, no sandbox.
+/// Synthetic surface: four territories of three camp-site tiles, scored by tile index, so a
+/// territory's best tiles are its last two. No game or sandbox involved.
 /// </summary>
 internal sealed class GraphSurface : GameSurface
 {
@@ -56,8 +55,7 @@ internal sealed class GraphSurface : GameSurface
     }
 }
 
-/// <summary>Counts the fx calls so the star render checks have evidence: one StartFx per
-/// published pick, one StopFx per tracked star when the published set goes inactive.</summary>
+/// <summary>Counts fx calls so star-render checks have evidence.</summary>
 internal sealed class CountingCanvas : PickCanvas
 {
     public int Started;
@@ -68,13 +66,11 @@ internal sealed class CountingCanvas : PickCanvas
 }
 
 /// <summary>
-/// DEBUG [noopc] no-op contract harness. GLOSSARY.md "Placement mode" is the spec: all three
-/// settle types share CampPlacementEvaluation, so a FoundCity session must see ZERO writes.
-/// Every evaluation check compares a full signature of the mutable state (counts, array
-/// lengths, CurrentPositionIndex, every tile's index and Showable, every condition flag)
-/// before and after, so any mutation of vanilla placement is caught, not just the known one.
-/// Camp placement is the control: the tail must still be reserved, the picks written, and the
-/// vanilla glyphs suppressed there. The pin gate is driven through the real Harmony postfix.
+/// DEBUG [noopc] no-op contract harness. All three settle types share
+/// CampPlacementEvaluation, so a city session must see zero writes. Checks compare a full
+/// signature of the mutable state before and after, catching any mutation, not just known
+/// ones. Camp placement is the control: tail reserved, picks written, vanilla glyphs
+/// suppressed. The pin gate is driven through the real postfix.
 /// </summary>
 internal static class Program
 {
@@ -132,7 +128,7 @@ internal static class Program
         return sb.ToString();
     }
 
-    /// <summary>Drive the real Patch 1 postfix (the advisor's only entry point per refresh).</summary>
+    /// <summary>Drive the real camp-evaluation postfix (the advisor's entry point per refresh).</summary>
     private static void Refresh(CampPlacementEvaluation eval, int cursorTile)
     {
         var postfix = typeof(CampEvaluationPatch).GetMethod("Postfix", BindingFlags.NonPublic | BindingFlags.Static);
@@ -140,9 +136,7 @@ internal static class Program
     }
 
     /// <summary>
-    /// Drive the real Patch 2 postfix with a given vanilla answer and report the answer the
-    /// gate leaves. Expected values encode the gate contract, so this is the only place the
-    /// gate's behavior is pinned.
+    /// Drive the real pin-gate postfix. Expected values encode the gate contract.
     /// </summary>
     private static void Gate(string name, bool vanilla, int tileIndex, bool expected)
     {

@@ -6,10 +6,9 @@ using SettlementPlacementAdvisor;
 namespace CfgGen
 {
     /// <summary>
-    /// Writes the pre-generated advisor cfg. Usage: CfgGen [version] [output-path].
-    /// The version argument lands in the BepInEx header line, so a release cfg
-    /// reads "created by plugin SettlementPlacementAdvisor v1.0.0".
-    /// Same ConfigFile writer the game uses; the output is byte-shaped identical.
+    /// Writes the pre-generated advisor cfg. Usage: CfgGen [version] [output-path]. Uses the
+    /// game's ConfigFile writer, so output matches a game-written file. The version lands in
+    /// the BepInEx header line.
     /// </summary>
     internal static class Program
     {

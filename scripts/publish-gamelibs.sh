@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Stage the exact game+BepInEx assemblies into the private GameLibs repo,
-# pack Humankind.GameLibs, push to the private GitHub Packages feed.
-# Requires GITHUB_TOKEN exported: a PAT with write:packages.
-# Version argument = the game build the DLLs came from (e.g. 1.10.25620).
-# Knobs: GAME_DIR (game install), GAMLIBS_REPO (staging repo dir), DOTNET_ROOT.
+# Stage game + BepInEx assemblies into the private GameLibs repo, pack
+# Humankind.GameLibs, and push it to GitHub Packages. Requires GITHUB_TOKEN
+# (PAT with write:packages). Version argument = the game build (e.g. 1.10.25620).
+# Knobs: GAME_DIR, GAMLIBS_REPO (staging repo dir), DOTNET_ROOT.
 set -euo pipefail
 
 version="${1:?usage: scripts/publish-gamelibs.sh <game-build-version>}"

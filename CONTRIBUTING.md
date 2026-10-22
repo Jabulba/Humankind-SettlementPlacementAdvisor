@@ -71,7 +71,7 @@ Authentication: `GAMELIBS_PAT` env var (interpolated in `nuget.config`).
   needs minutes to propagate after a publish, so a CI restore right after one can
   fail with NU1102: rerun the workflow, do not republish.
 - Game update: repack with `scripts/publish-gamelibs.sh <game-build-number>` using a
-  PAT with `write:packages`, then bump the exact pins in all three csproj files.
+  PAT with `write:packages`, then bump the exact pins in all four csproj files.
 
 Push CI (`.github/workflows/push.yml`): commit-message lint over the pushed range,
 Release build, `scripts/test-range.sh`.

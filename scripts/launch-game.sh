@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # Launch Humankind and report when THIS boot's plugin banner appears in the BepInEx log.
 #
-# Why the old approach failed: BepInEx truncates LogOutput.log when the game process starts,
-# so every boot writes the same single "Loading [...]" line. Counting marker lines across boots
-# (count > count-before) can never be true: 1 > 1 is false, so the script always timed out even
-# though the game reached "game: ready".
-#
-# New detection: snapshot the log's mtime/size/inode before launching, wait for the file to be
-# rewritten (the new boot's own content), then look for the plugin banner that Plugin.Awake
-# prints after Harmony finishes patching. No dependency on any other mod's markers.
+# BepInEx truncates LogOutput.log at process start, so marker-line counting across boots
+# never works (1 > 1 is false). Instead snapshot the log's mtime/size/inode, wait for the
+# rewrite, then look for the banner Plugin.Awake prints after Harmony patches.
 #
 # Usage: scripts/launch-game.sh [--kill-first]
 # Prints READY (exit 0) on detection, FAIL (exit 1) on timeout.

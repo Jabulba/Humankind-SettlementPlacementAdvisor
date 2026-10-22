@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# Decompile HUMANKIND's managed (.NET) assemblies into ./reference for offline reading.
+# Decompile HUMANKIND's managed assemblies into ./reference for offline reading.
+# reference/ is gitignored: decompiled game code must NEVER be committed.
 #
-# Decompiled game code must NEVER be committed: everything under reference/ is
-# gitignored (see .gitignore). This is a local convenience cache so we don't have
-# to re-run ILSpy on every investigation.
-#
-# Requirements:
-#   - dotnet SDK in ~/.dotnet with ilspycmd installed as a global tool
-#       dotnet tool install -g ilspycmd
-#   - Humankind installed via Steam
+# Requirements: dotnet SDK in ~/.dotnet with ilspycmd as a global tool
+#   (dotnet tool install -g ilspycmd), and Humankind installed via Steam.
 #
 # Usage:
 #   scripts/decompile-game.sh                    # full decompile + type lists
 #   scripts/decompile-game.sh <FullyQualifiedTypeName>
 #                                                # print a single type to stdout
 #
-# Overridable env: GAME_MANAGED, OUT (cache root for the managed copy), OUTGAME_DIR
-# (default: the sibling outgame dir of OUT), DOTNET_ROOT. Keep both inside the
-# gitignored reference/ tree: decompiled game code must stay out of git.
+# Env: GAME_MANAGED, OUT (managed cache root), OUTGAME_DIR (default: sibling outgame
+# dir), DOTNET_ROOT. Keep both output dirs inside the gitignored reference/ tree.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

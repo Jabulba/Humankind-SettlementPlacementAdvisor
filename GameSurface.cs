@@ -5,13 +5,10 @@ using Amplitude.Mercury.Simulation; // SimulationEntityGUID
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// THE GAME SURFACE: every game fact the advisor needs to compute a pick, as one seam.
-    /// The adapter GameApi resolves the game members once by reflection at plugin start; from
-    /// then on the pick computation and the advisor talk to this interface only. Failure
-    /// semantics are part of the contract: IsCampableTile fails closed (never recommend an
-    /// unchecked tile), IsTileExplored fails open, TryGetArmy returns null, frame counters
-    /// return false. The territory graph lives here too: the rule modules never touch the AI
-    /// snapshot globals, and territory facts fail closed (an unknown territory never advises).
+    /// All game facts the advisor needs, as one seam over GameApi. Failure semantics are part
+    /// of the contract: IsCampableTile and territory facts fail closed, IsTileExplored fails
+    /// open, TryGetArmy returns null, and frame counters return false. Rule modules never touch
+    /// the game's AI snapshot globals directly.
     /// </summary>
     internal interface GameSurface
     {

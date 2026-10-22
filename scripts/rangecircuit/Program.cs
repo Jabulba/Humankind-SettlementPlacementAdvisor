@@ -8,11 +8,10 @@ using SettlementPlacementAdvisor;
 using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition;
 
 /// <summary>
-/// DEBUG [rngc2] synthetic territory graphs. Territory k has 3 campable/explored tiles
-/// (100+10k .. 102+10k), score = tile index, so a territory's best tile is its last one.
-/// Edges are real `Territory.Adjacency` values with the game's transition flags, and the
-/// surface answers adjacency through the production filter (GameApi.LandAdjacentIndexes),
-/// so the harness exercises the shipped land filter plus the shipped range BFS.
+/// DEBUG [rngc2] synthetic graph surface. Territory k has three campable/explored tiles
+/// (100+10k .. 102+10k) scored by tile index, so its best tile is the last one. Adjacency uses
+/// real Territory.Adjacency edges through the production land filter, exercising the shipped
+/// filter and range BFS together.
 /// </summary>
 internal sealed class GraphSurface : GameSurface
 {

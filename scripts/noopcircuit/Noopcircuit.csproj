@@ -1,11 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- NO-OP CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet and the two
-       Harmony postfixes over a synthetic game surface and a synthetic snapshot, and asserts
-       the advisor is a strict no-op on every non-camp placement evaluation, that camp
-       placement still writes its tail, and that the pin gate hands vanilla back when the
-       advisor is inactive. Not part of the mod build (the mod csproj excludes scripts/**).
-       Plugin.cs is replaced by PluginShim.cs: the headless stand-in for Plugin. -->
+  <!-- NO-OP CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet and both
+       Harmony postfixes over a synthetic surface and snapshot. Asserts the advisor writes
+       nothing on a non-camp evaluation, keeps its camp tail, and hands the pin gate back to
+       vanilla when inactive. Not part of the mod build; Plugin.cs is replaced by PluginShim.cs. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -32,8 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Game + BepInEx assemblies from the private GameLibs feed (nuget.config inheritance
-         from the repo root): version pin = game build, same as the mod and range harnesses. -->
+    <!-- Game + BepInEx assemblies from the private GameLibs feed, same pin as the mod. -->
     <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" />
   </ItemGroup>
 

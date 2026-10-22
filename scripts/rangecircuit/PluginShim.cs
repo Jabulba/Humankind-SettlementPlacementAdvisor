@@ -1,9 +1,8 @@
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// DEBUG-harness stand-in for the BepInEx plugin class: GameApi.Fail logs through
-    /// Plugin.Instance. Null Instance = failures silently ignored, which is what the
-    /// harness wants (the harness reads the picks, not the log).
+    /// DEBUG-harness stand-in for Plugin so GameApi.Fail can log. Instance stays null: the
+    /// harness reads picks, not failures.
     /// </summary>
     internal sealed class Plugin
     {

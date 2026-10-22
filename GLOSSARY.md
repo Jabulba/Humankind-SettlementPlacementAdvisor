@@ -1,19 +1,17 @@
 # Glossary
 
 Domain terms for the settlement placement advisor. Architecture vocabulary (module, interface,
-depth, seam, adapter, leverage, locality) lives in the codebase-design skill; this file
-names the domain and the modules at its seams.
+depth, seam, adapter, leverage, locality) lives in the codebase-design skill; this file names
+the domain and the modules at its seams.
 
 ## Domain
 
-- **Placement mode**: which settlement action a placement session is running
-  (`ArmyActionType`): `CreateCamp` for camp/outpost placement, `FoundCity` and
-  `FoundCityWithSettler` for city founding. All three share the game's
-  `CampPlacementEvaluation` type, so the advisor's patch sees city sessions too. The
-  advisor's contract: camp placement is the only mode it writes; on every other mode it is
-  a strict no-op — it never writes, resizes, or re-styles that evaluation, and it hands its
-  pin gate back to vanilla. A camp tail left on the shared evaluation is released on the
-  next city activation (see Tail).
+- **Placement mode**: the settlement action a session is running (`ArmyActionType`):
+  `CreateCamp` for camp/outpost placement, `FoundCity` and `FoundCityWithSettler` for city
+  founding. All three share `CampPlacementEvaluation`, so the advisor's patch sees city
+  sessions too. Contract: camp placement is the only mode it writes; every other mode is a
+  strict no-op that hands its pin gate back to vanilla. A camp tail left on the shared
+  evaluation is released on the next city activation (see Tail).
 - **Refresh**: one pass of the placement snapshot sync: vanilla full eval (only at
   activation / district change) and `UpdateCurrentPosition` (every mouse move). The advisor
   hooks `UpdateCurrentPosition`, so a refresh means "the cursor position was processed".
@@ -33,21 +31,18 @@ names the domain and the modules at its seams.
 - **Pick set**: the published, immutable result of one pick computation: version, tiles
   (ascending, unique), tile membership, and the entering/leaving diff against the previous
   pick set. The only channel from the simulation thread to the presentation thread.
-- **Publish**: swap a new pick set into the volatile channel. Only on pick-content change;
-  identical content publishes nothing and bumps no version. An INACTIVE publish is the
-  advisor's deactivation: the presentation stops the advisor's stars and the FIMS pin gate
-  returns its answer to vanilla. It is the only thing the advisor does on a placement mode
-  it does not own.
-- **Tail**: the FIXED slot window in `CampPlacementEvaluation.ValidTiles` owned by the
-  evaluation writer, reserved at activation. Base slot = the cursor slot: vanilla's own
-  append point after a full-eval `Initialize` (`UpdateCurrentPosition` appends the cursor
-  entry exactly at the baseline count); slots above it hold the picks, rewritten in place
-  at invariant indices every refresh. Vanilla entries are never moved, vanilla's appends
-  land above the tail. Vanilla's pin presentation binds pins to array indices, so stable
-  slot indices keep every retained pick bound: the cursor tile's element is the only one
-  that changes between refreshes inside one pick set. Vanilla scores the tail slots of a
-  mode it owns too: its best-placement loop runs over the array length, not the valid
-  count, so a tail released by a mode switch has to be scrubbed, not just counted down.
+- **Publish**: swap a new pick set into the volatile channel. Only a pick-content change
+  publishes; identical content bumps no version. An INACTIVE publish is the advisor's
+  deactivation: stars stop and the FIMS pin gate returns to vanilla. It is the only thing
+  the advisor does on a placement mode it does not own.
+- **Tail**: the fixed slot window in `CampPlacementEvaluation.ValidTiles` owned by the
+  evaluation writer. The base slot is the cursor slot, vanilla's append point after a
+  full-eval `Initialize` (`UpdateCurrentPosition` appends the cursor entry at the baseline
+  count); slots above it hold picks, rewritten in place at invariant indices every refresh.
+  Vanilla entries are never moved and its appends land above the tail. Because vanilla binds
+  pins to array indices, stable slots keep every retained pick bound; only the cursor tile's
+  element changes within one pick set. Vanilla scores the array's whole length, not the valid
+  count, so a tail left by a mode switch must be scrubbed, not just counted down.
 
 ## Modules
 
@@ -63,11 +58,10 @@ names the domain and the modules at its seams.
   keeps the `Open` transition edges). Territory facts fail closed: an unknown territory
   never advises.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
-  evaluation. Tail protocol: write the pick slots in place, barrier, raise
-  `ValidTileCount`; own `CurrentPositionIndex` when the cursor tile is one of the picks.
-  Reserves tail capacity in the activation patch; suppresses vanilla placement glyphs.
-  Camp placement writes only: the mutating entry point guards on `SettleType`, and a city
-  activation gets the one cleanup it needs, the release of the slots the advisor owns.
+  evaluation. Writes pick slots in place, barriers, then raises `ValidTileCount`; owns
+  `CurrentPositionIndex` when the cursor tile is a pick. Reserves tail capacity at
+  activation and suppresses vanilla glyphs. Camp placement writes only: the mutating entry
+  point guards on `SettleType`, and city activation only releases the advisor's own slots.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
   lazy snapshot subscription. Animates entering and leaving tiles only.
@@ -79,10 +73,8 @@ names the domain and the modules at its seams.
 - Simulation thread: pick computation, evaluation writer, publish. No Unity object access.
 - Presentation thread: star renderer, pick canvas adapter, FIMS pin gate.
 - Crossing: one volatile reference swap to an immutable pick set. Presentation readers
-  capture the pick set once per pass and answer every membership question from that
-  capture; a reader never queries the live channel twice in one pass.
-- The evaluation array is shared by reference with the presentation layer, not copied. The
-  writer's count publish (write slots, barrier, raise count) is the ordering rule, and
-  because the writer never moves an entry, the ghost, the settle action, the
-  best-placement cascade and the pins stay coherent; the one index the writer repoints is
-  `CurrentPositionIndex` when the cursor tile is a pick.
+  capture the set once per pass and never query the live channel twice in one pass.
+- The evaluation array is shared by reference, not copied. The writer's publish order (write
+  slots, barrier, raise count) keeps the ghost, settle action, best-placement cascade and
+  pins coherent. The only index it repoints is `CurrentPositionIndex`, when the cursor tile
+  is a pick.

@@ -1,11 +1,9 @@
 <Project>
-  <!-- Reference resolution: HintPaths only. MSBuild hands @(Content);@(None) to
-       ResolveAssemblyReference as candidate assemblies, so any game-DLL copy in the
-       project tree (the debug harness copies its references into scripts/rangecircuit/bin)
-       silently replaces the game assemblies in a compile. Dropping {CandidateAssemblyFiles}
-       leaves HintPaths, the target-framework directory, and raw file names. Projects under
-       reference/devtools keep MSBuild's defaults: only the nearest Directory.Build.props
-       is imported. -->
+  <!-- Reference resolution: HintPaths only. MSBuild treats @(Content)/@(None) as candidate
+       assemblies, so game-DLL copies in the tree (e.g. scripts/rangecircuit/bin) would
+       silently replace the real game assemblies at compile time. Dropping
+       {CandidateAssemblyFiles} leaves HintPaths, the target-framework directory, and raw file
+       names. Projects under reference/devtools keep MSBuild's defaults. -->
   <PropertyGroup>
     <AssemblySearchPaths>{HintPathFromItem};{TargetFrameworkDirectory};{RawFileName}</AssemblySearchPaths>
   </PropertyGroup>

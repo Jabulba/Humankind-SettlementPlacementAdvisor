@@ -12,16 +12,13 @@ using HarmonyLib;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// THE GAME SURFACE adapter: reflection over the game members behind the GameSurface
-    /// interface. Resolve() runs at plugin start and only verifies the members EXIST: the
-    /// Sandbox statics (SimulationEvaluator, World, ...) are assigned by the game only once
-    /// the sandbox initializes, so their values are read lazily on each use. Any missing
-    /// member disables the advisor (vanilla untouched) and is logged verbatim. The
-    /// territory facts read the public AI snapshot directly (no reflection needed).
+    /// GameSurface implemented by reflection. Resolve() only verifies that members exist:
+    /// Sandbox statics are assigned at sandbox initialization, so values are read lazily. Any
+    /// missing member disables the advisor and is logged verbatim. Territory facts use the
+    /// public AI snapshot directly.
     /// </summary>
     internal sealed class GameApi : GameSurface
     {
-        /// <summary>The adapter every module receives from Plugin.Awake.</summary>
         public static readonly GameApi Shared = new GameApi();
 
         public static bool ReadyStatic;
@@ -122,7 +119,6 @@ namespace SettlementPlacementAdvisor
             ResolveError = string.Join("; ", failures);
         }
 
-        /// <summary>Land + point-of-interest validity for a camp site on the tile (sim thread).</summary>
         public bool IsCampableTile(int tileIndex)
         {
             try
@@ -138,7 +134,6 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        /// <summary>Simulation-side Army entity for the GUID, or null (sim thread).</summary>
         public object TryGetArmy(SimulationEntityGUID guid)
         {
             try
@@ -156,11 +151,6 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        /// <summary>
-        /// Full placement evaluation for one tile (sim thread): fills the ValidTile
-        /// (FIMS, exploitation tiles, build time) and returns the weighted score using
-        /// the game's own settlementScorePonderation.
-        /// </summary>
         public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
         {
             validTile = default(DistrictPlacementEvaluation.ValidTile);
@@ -194,10 +184,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Tile explored (scouted) by the given empire. Advisor candidate filter:
-        /// unexplored tiles must not be recommended. Fail-open (true) on reflection issues.
-        /// Exploration is monotonic per game; cache invalidation via VisibilityFrame covers
-        /// new scouting during a camp session.
+        /// Fail-open on reflection issues. Exploration is monotonic, so a cached pick is only
+        /// invalidated by VisibilityFrame when new scouting occurs during a camp session.
         /// </summary>
         public bool IsTileExplored(int tileIndex, int empireIndex)
         {
@@ -220,7 +208,6 @@ namespace SettlementPlacementAdvisor
             return army == null ? -1 : GetIntMember(army, "EmpireIndex");
         }
 
-        /// <summary>World frame counters used to invalidate the per-territory pick cache.</summary>
         public bool GetCurrentFrames(out int districtFrame, out int constructionFrame, out int visibilityFrame)
         {
             districtFrame = constructionFrame = visibilityFrame = 0;
@@ -246,7 +233,6 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        /// <summary>Territory owning the tile, -1 when the tile has no territory (sim thread).</summary>
         public int TerritoryOfTile(int tileIndex)
         {
             try
@@ -263,10 +249,6 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        /// <summary>
-        /// Territory facts from the public AI snapshot. False = territory unknown (fail
-        /// closed). The tiles view is the snapshot array: read-only, current refresh only.
-        /// </summary>
         public bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles)
         {
             isOcean = true;
@@ -291,13 +273,6 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        /// <summary>
-        /// Land-adjacent territory indexes from the public AI snapshot: the edges a ground
-        /// army crosses (TerritoryTransition.Open). Coast/shallow/deep water edges lead to
-        /// sea territories and would jump the advisor range across water; cliffs, mountains
-        /// and closed edges are not passable. Empty when unknown. Fresh array the caller
-        /// may keep.
-        /// </summary>
         public int[] LandAdjacentTerritories(int territoryIndex)
         {
             try
@@ -315,8 +290,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// The land filter, as data in / indexes out so the harness can drive it directly:
-        /// keeps only the Open-transition edges, in snapshot order.
+        /// Keeps only Open-transition edges, in snapshot order. Data in/indexes out so the
+        /// range harness can drive the production filter directly.
         /// </summary>
         internal static int[] LandAdjacentIndexes(Territory.Adjacency[] adjacencies)
         {

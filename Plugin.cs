@@ -6,17 +6,12 @@ using HarmonyLib;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Settlement Placement Advisor: while the camp (outpost) placement cursor is active,
-    /// shows recommended-tile stars for the hovered territory (top 2) and for every
-    /// territory in the adjacency range (top 1 each, RangeLevels = 2 by default), with FIMS
-    /// pins, mandatory counts that ignore the vanilla minimum-FIMS gate. No orders: it only
-    /// writes the advisor's tail slots of the placement evaluation array.
-    /// Rules: README.md; module vocabulary: GLOSSARY.md.
+    /// Camp-placement advisor composition root: recommended-tile stars with FIMS pins.
+    /// Rules: README.md. Module vocabulary: GLOSSARY.md.
     /// </summary>
     [BepInPlugin(AdvisorConfig.PluginGuid, AdvisorConfig.PluginName, ModVersion.Value)]
     public class Plugin : BaseUnityPlugin
     {
-
         internal static ConfigEntry<int> CfgTopHovered;
         internal static ConfigEntry<int> CfgTopNeighbour;
         internal static ConfigEntry<int> CfgRangeLevels;

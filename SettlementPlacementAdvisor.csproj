@@ -1,8 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Standalone UI mod: settlement placement advisor. Build: scripts/build-advisor.sh
-       Rules: README.md; module vocabulary: GLOSSARY.md.
-       Independent of the brain-harness projects; issues no orders. -->
+  <!-- Settlement placement advisor. Build: scripts/build-advisor.sh. Rules: README.md.
+       Module vocabulary: GLOSSARY.md. -->
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>7.3</LangVersion>
@@ -11,31 +10,25 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Nullable>disable</Nullable>
     <DebugType>none</DebugType>
-    <!-- No <Version>: MinVer stamps the version from git tags (see CONTRIBUTING.md). -->
-    <!-- The game ships its own copies of the referenced assemblies: Private=false keeps
-         them out of the output. CS0436 stays enabled: it is the loud signal for
-         decompiled game sources leaking into this compile. -->
+    <!-- No <Version>: MinVer stamps it from git tags. The game ships its own copies of the
+         referenced assemblies, so references stay out of the output. CS0436 stays enabled: it
+         is the loud signal for decompiled game sources leaking into this compile. -->
     <NoWarn>CS0618</NoWarn>
   </PropertyGroup>
 
-  <!-- Debug harness sources live under scripts/ (own projects) and the decompiled game
-       cache lives under reference/ (gitignored): keep both, their generated obj/ files and
-       all cache content out of this project's default item globs. -->
+  <!-- Harness sources live under scripts/ (own projects) and the decompiled game cache under
+       reference/ (gitignored): keep both out of this project's default item globs. -->
   <ItemGroup>
     <Compile Remove="scripts/**/*.cs" />
     <Compile Remove="reference/**/*.cs" />
     <None Remove="reference/**" />
   </ItemGroup>
 
-  <!-- THE GAME INSTALL PATH, resolved per machine: -p:GameDir=... wins, then the
-       GAME_DIR environment variable (the same knob scripts/launch-game.sh reads),
-       then the standard Steam Linux install under the current user's home. Nothing
-       here is machine-specific: a clone elsewhere builds and deploys unchanged.
-       GameManagedDir/BepInExCoreDir are gone: the GameLibs package replaced the
-       HintPath references, nothing consumed them. -->
+  <!-- Game install path, resolved per machine: -p:GameDir=... wins, then GAME_DIR (the same
+       knob scripts/launch-game.sh reads), then the standard Steam Linux install. -->
   <PropertyGroup>
-    <!-- GetEnvironmentVariable, not $(Env:GAME_DIR): the .NET SDK's MSBuild evaluates
-         Env: to an empty string, so the Env: form silently falls through to the default. -->
+    <!-- GetEnvironmentVariable, not $(Env:GAME_DIR): the SDK's MSBuild returns an empty
+         string for Env:, which silently falls through to the default. -->
     <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetEnvironmentVariable('GAME_DIR'))</GameDir>
     <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetFolderPath(SpecialFolder.UserProfile))/.local/share/Steam/steamapps/common/Humankind</GameDir>
     <BepInExPluginsDir>$(GameDir)/BepInEx/plugins</BepInExPluginsDir>
@@ -45,14 +38,14 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" />
     <!-- Compile-time game + BepInEx assemblies from the private GameLibs feed
-         (nuget.config; CONTRIBUTING.md): version = game build, runtime assets
-         excluded, the game ships its own copies. -->
+         (nuget.config; CONTRIBUTING.md). Version = game build; runtime assets excluded
+         because the game ships its own copies. -->
     <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
 
 
-  <!-- Deploy only when the install exists; the skip is loud so a build on a machine
-       without the game never looks like a successful deploy. -->
+  <!-- Deploy only when the install exists; the skip is loud so a missing game never looks
+       like a successful deploy. -->
   <Target Name="CopyToPlugins" AfterTargets="Build">
     <Message Importance="high" Condition="!Exists('$(GameDir)')"
              Text="GameDir '$(GameDir)' not found: $(TargetFileName) NOT deployed (pass -p:GameDir=... or export GAME_DIR)" />
@@ -61,9 +54,8 @@
     <Message Importance="high" Condition="Exists('$(GameDir)')" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
   </Target>
 
-  <!-- THE MOD VERSION: MinVer's computed version becomes the compile-time constant
-       the BepInPlugin attribute consumes (single source: git tags, CONTRIBUTING.md).
-       The cfg generator header takes its version as a CLI argument in CI. -->
+  <!-- MinVer's computed version becomes the compile-time constant consumed by the
+       BepInPlugin attribute, keeping git tags the single source. -->
   <Target Name="GenerateModVersion" BeforeTargets="CoreCompile">
     <PropertyGroup>
       <_ModVersionSource>internal static class ModVersion

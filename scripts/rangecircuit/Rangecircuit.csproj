@@ -1,8 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- DEBUG HARNESS (throwaway): drives the real PickComputation over a synthetic territory
-       graph and asserts every pick comes from a territory within the configured range.
-       Not part of the mod build (the mod csproj excludes scripts/**). -->
+  <!-- DEBUG HARNESS: drives the real PickComputation over a synthetic territory graph and
+       asserts every pick comes from a territory within range. Not part of the mod build. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -24,9 +23,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Game + BepInEx assemblies from the private GameLibs feed (nuget.config
-         inheritance from repo root): version pin = game build. Runtime copies are
-         Private=true equivalents: the harness runs headless against these DLLs. -->
+    <!-- Game + BepInEx assemblies from the private GameLibs feed: the harness runs headless
+         against them, so runtime assets are included. -->
     <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" />
   </ItemGroup>
 

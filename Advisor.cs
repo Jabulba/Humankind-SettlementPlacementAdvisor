@@ -5,12 +5,9 @@ using Amplitude.Mercury.Simulation;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// THE ADVISOR: simulation-thread orchestration from the vanilla placement refresh to a
-    /// published pick set. Readiness gates, hovered territory derivation, pick computation,
-    /// evaluation writer, publish. No rule logic, no evaluation array writes, no presentation
-    /// calls (the star renderer subscribes lazily from here). Contract: the advisor is a
-    /// STRICT NO-OP on every evaluation it does not own, i.e. on all non-camp placement modes
-    /// (see Run), where it only ever deactivates its own pick set.
+    /// Simulation-thread orchestration from the vanilla placement refresh to a published pick
+    /// set. It owns no rule logic or evaluation writes, and is a strict no-op on every
+    /// evaluation it does not own: non-camp modes only deactivate the advisor's pick set.
     /// </summary>
     internal sealed class Advisor
     {
@@ -29,13 +26,9 @@ namespace SettlementPlacementAdvisor
 
         public void Run(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
-            // The camp placement evaluation is SHARED by FoundCity and FoundCityWithSettler
-            // (CampPlacementEvaluation.GetExtensionAndPackage switches on SettleType), and the
-            // vanilla glyph display consumes ValidTiles[0..ValidTileCount) with
-            // onlyShowShowable, so any write here would restyle city placement. Non-camp
-            // evaluations are untouched: only our own pick set is deactivated, so no advisor
-            // star survives into city placement and vanilla keeps its glyphs, pins and cursor
-            // entry exactly as if the mod were absent.
+            // FoundCity and FoundCityWithSettler share this evaluation type, and vanilla
+            // displays its glyphs from ValidTiles[0..ValidTileCount), so writing here would
+            // restyle city placement. Non-camp modes may only deactivate our pick set.
             if (!m_Game.Ready || evaluation.SettleType != ArmyActionType.CreateCamp)
             {
                 Deactivate();
@@ -65,13 +58,12 @@ namespace SettlementPlacementAdvisor
                 Plugin.CfgTopHovered.Value, Plugin.CfgTopNeighbour.Value, Plugin.CfgRangeLevels.Value));
             if (picks == null)
             {
-                PublishEmpty(evaluation); // game facts unavailable: advisor deactivates
+                PublishEmpty(evaluation);
                 return;
             }
 
             m_Writer.Write(evaluation, picks, cursorTile);
 
-            // Canonical pick set: fully filled ascending tiles, no holes.
             var tiles = new int[picks.Length];
             for (int i = 0; i < picks.Length; i++)
                 tiles[i] = picks[i].Tile;
@@ -79,9 +71,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Deactivate WITHOUT writing the evaluation: publish an inactive pick set only. Every
-        /// non-camp placement mode and every failure path take this route. Publishing an
-        /// already-inactive set publishes nothing, so per-mouse-move calls here are free.
+        /// Publish an inactive pick set without touching the evaluation. Used by every non-camp
+        /// mode and failure path; republishing an inactive set is a no-op.
         /// </summary>
         public void Deactivate()
         {
@@ -89,10 +80,7 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Camp placement only: drop the advisor's tail contribution, then deactivate. A
-        /// non-camp call is inert (the writer's gate returns before touching the array), but
-        /// keep it out of the non-camp paths so the intent stays visible at the call site:
-        /// those take Deactivate, which never touches an evaluation.
+        /// Camp placement only: drop the advisor's tail contribution, then deactivate.
         /// </summary>
         public void PublishEmpty(CampPlacementEvaluation evaluation)
         {

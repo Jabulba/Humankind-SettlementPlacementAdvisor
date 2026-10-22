@@ -7,11 +7,7 @@ using BuildEnums = Amplitude.Mercury.Data.Presentation.PresentationEntityLevelBu
 
 namespace SettlementPlacementAdvisor
 {
-    /// <summary>
-    /// THE PICK CANVAS: where the star renderer puts and removes tile feedback fx. Keeps the
-    /// renderer free of presentation types; UnityPickCanvas is the adapter onto the game's
-    /// feedback controller.
-    /// </summary>
+    /// <summary>Tile-feedback seam that keeps the renderer free of presentation types.</summary>
     internal interface PickCanvas
     {
         /// <summary>False while the presentation feedback controller does not exist.</summary>
@@ -56,14 +52,11 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// THE STAR RENDERER: draws the published pick set on the pick canvas through ONE entry
-    /// point, Render(PickSet), driven by the cursor snapshot's presentation event. The renderer
-    /// owns the rendered version, the per-tile fx state, the lazy subscription, and mode-exit
-    /// clearing. Entering tiles start fx, leaving tiles stop fx, retained tiles keep their
-    /// running fx untouched; every membership question is answered on the captured snapshot, so
-    /// a mid-pass publish cannot tear the reconcile (that tear was the mouse-hover flicker).
-    /// Vanilla camp-mode glyphs are suppressed by the evaluation writer, so this is the only
-    /// placement star display; the cursor ghost stays vanilla.
+    /// Draws the published pick set on the pick canvas, driven by the cursor snapshot's
+    /// presentation event. Entering tiles start fx, leaving tiles stop fx, retained tiles keep
+    /// their fx. Membership is answered from the captured snapshot, so a mid-pass publish
+    /// cannot tear the reconcile. Vanilla glyphs are suppressed by the writer; the cursor ghost
+    /// stays vanilla.
     /// </summary>
     internal sealed class StarRenderer
     {
@@ -80,9 +73,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Wire renders to the snapshot. The snapshot instance exists only after the game
-        /// creates it (long after plugin Awake — subscribing in Awake NREs), so this is called
-        /// lazily from the placement sync on the simulation thread.
+        /// Subscribe lazily: the snapshot exists only after the game creates it, long after
+        /// plugin Awake (subscribing in Awake would NRE).
         /// </summary>
         public void EnsureSubscription()
         {

@@ -6,7 +6,7 @@ using Amplitude.Mercury.Simulation;
 
 namespace SettlementPlacementAdvisor
 {
-    /// <summary>One advisor pick: the tile, its weighted score, and vanilla's evaluation record for it.</summary>
+    /// <summary>One pick: tile, weighted score, and vanilla's evaluation record for it.</summary>
     internal struct Pick
     {
         public int Tile;
@@ -15,9 +15,8 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// THE CURSOR CONTEXT: the pick computation's full input for one refresh: hovered
-    /// territory, placing army + empire, and the advised counts. Count clamping lives here
-    /// (counts are mandatory, minimum 1), not in the caller.
+    /// All input for one refresh. Count clamping (minimum 1: counts are mandatory) lives
+    /// here, not in the caller.
     /// </summary>
     internal struct CursorContext
     {
@@ -44,20 +43,17 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// THE PICK COMPUTATION: which tiles to advise for a cursor context. Pure: it evaluates
-    /// and reads the territory graph through the Game Surface, and touches no evaluation
-    /// array, no published pick set, no presentation. Null = game facts unavailable. Picks
-    /// come back in canonical order (ascending by tile, unique). The per-territory cache is
-    /// keyed by territory, top count, empire, and the rule frames READ HERE (callers never
-    /// thread them); budgeted per refresh. Rules: README.md (mandatory counts, no stars on
-    /// unexplored/owned/ocean tiles).
+    /// Which tiles to advise for a cursor context. Pure: reads the game only through
+    /// GameSurface and returns ascending, unique picks (null = game facts unavailable). The
+    /// per-territory cache is keyed by territory, top count, empire, and the frames read here;
+    /// callers never thread frames. Evaluation is budgeted per refresh. Rules: README.md.
     /// </summary>
     internal sealed class PickComputation
     {
         /// <summary>Hard cap on tile evaluations per refresh (cache-miss territories only).</summary>
         public const int MaxEvaluationsPerRefresh = 1200;
 
-        /// <summary>Cap on collected in-range territories: bounds the evaluation tail (EvaluationWriter).</summary>
+        /// <summary>Bounds the in-range territories, and therefore the evaluation tail size.</summary>
         public const int MaxRangeTerritories = 64;
 
         private struct CacheEntry
@@ -90,7 +86,7 @@ namespace SettlementPlacementAdvisor
         {
             int districtFrame, constructionFrame, visibilityFrame;
             if (!m_Game.GetCurrentFrames(out districtFrame, out constructionFrame, out visibilityFrame))
-                return null; // game facts unavailable: the advisor deactivates
+                return null;
 
             m_Budget = MaxEvaluationsPerRefresh;
             m_BudgetExceededLogged = false;
@@ -108,7 +104,7 @@ namespace SettlementPlacementAdvisor
             }
 
             var picks = m_Merged.ToArray();
-            Array.Sort(picks, (a, b) => a.Tile.CompareTo(b.Tile)); // canonical ascending order
+            Array.Sort(picks, (a, b) => a.Tile.CompareTo(b.Tile));
             return picks;
         }
 
@@ -120,11 +116,10 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Territories in range excluding the center, over LAND adjacency only: center
-        /// counts as level 1, so rangeLevels = 3 adds all land-adjacent, then all
-        /// adjacent-to-adjacent. Sea, cliff, mountain and closed edges never count as a
-        /// step (the game's adjacency array carries them all; GameApi filters them).
-        /// Capped at MaxRangeTerritories so the tail stays bounded.
+        /// Territories in range excluding the center. Center counts as level 1, so a territory
+        /// at hop d is in range when d + 1 &lt;= rangeLevels. Only LAND edges count: the game's
+        /// adjacency array also carries sea, cliff, mountain and closed edges (GameApi filters
+        /// them). Capped so the evaluation tail stays bounded.
         /// </summary>
         private void CollectRangeTerritories(int hoveredTerritory, int rangeLevels)
         {
@@ -225,9 +220,8 @@ namespace SettlementPlacementAdvisor
                 for (int i = 0; i < take; i++) picks.Add(evaluated[i]);
             }
 
-            // Truncated (budget-starved) results are NOT cached: frames are static during
-            // a camp session, so a cached partial result would freeze missing stars until
-            // the next frame change. Re-evaluate such territories on the next refresh.
+            // Truncated (budget-starved) results are not cached: frames are static during a
+            // camp session, so a cached partial result would hide picks indefinitely.
             if (!truncated)
             {
                 m_Cache[territoryIndex] = new CacheEntry

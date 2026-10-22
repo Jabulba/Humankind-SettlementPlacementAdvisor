@@ -6,32 +6,20 @@ using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// THE EVALUATION WRITER: puts the computed picks into the game's camp placement
-    /// evaluation so the FIMS pins have data, and suppresses the vanilla placement glyphs.
-    /// CAMP PLACEMENT WRITES ONLY: the mutating entry point guards on SettleType, so the
-    /// FoundCity and FoundCityWithSettler sessions that share this evaluation type are never
-    /// written, resized, or re-styled. Their activation gets one cleanup in return: a tail
-    /// left by an earlier camp session is scrubbed, because vanilla scores
-    /// ValidTiles[0..Length), not [0..ValidTileCount).
-    /// The tail is ONE FIXED window of array indices reserved at activation: slot
-    /// TailStart is the cursor slot, vanilla's own append point after a full-eval
-    /// Initialize (UpdateCurrentPosition appends the cursor entry exactly at
-    /// ValidTileCount = baseline count); slots TailStart+1.. hold the picks, rewritten in
-    /// place at INVARIANT indices every refresh. Vanilla entries are never moved, so the
-    /// index-bound presentation (pins bind pins to array indices) never rebinds a retained
-    /// pick: the cursor tile's element is the only display element that changes between
-    /// refreshes inside one pick set. Vanilla's per-cursor-tile appends land above the
-    /// tail (append point >= tail end once the tail is live). ValidTileCount is raised to
-    /// the tail end only after the entries are written and a memory barrier, so the
-    /// presentation thread iterating [0, ValidTileCount) never sees a hole. Simulation
-    /// thread only.
+    /// Puts picks into the camp placement evaluation for the FIMS pins and suppresses the
+    /// vanilla glyphs. Camp placement writes only: FoundCity and FoundCityWithSettler share
+    /// this evaluation type, so the mutating entry point guards on SettleType and a city
+    /// activation only scrubs a tail left by an earlier camp session.
+    ///
+    /// The tail is one fixed window reserved at activation. TailStart is the cursor slot,
+    /// vanilla's append point after a full-eval Initialize; slots above it hold the picks,
+    /// rewritten at invariant indices. Vanilla entries never move, so index-bound pins never
+    /// rebind a retained pick. ValidTileCount rises only after the entries are written and a
+    /// memory barrier passed, so the presentation thread never sees a hole. Simulation thread.
     /// </summary>
     internal sealed class EvaluationWriter
     {
-        /// <summary>
-        /// Headroom of the tail window: pick slots (hovered pair + MaxRangeTerritories
-        /// capped) + the cursor slot, rounded up. Bounds the writer's own footprint.
-        /// </summary>
+        /// <summary>Headroom over the cursor slot plus the capped pick count.</summary>
         public const int TailCapacity = 128;
 
         private static readonly Pick[] s_Empty = new Pick[0];
@@ -39,22 +27,17 @@ namespace SettlementPlacementAdvisor
         private int m_TailStart = -1; // cursor slot index (fixed for the session); -1 = no baseline
 
         /// <summary>
-        /// Activation baseline (postfix on CampPlacementEvaluation.Initialize, sim thread):
-        /// the vanilla valid positions are final here, so record the baseline count (the cursor
-        /// slot index = the tail base) and reserve the whole tail window before the cursor
-        /// starts refreshing. Camp activations only: SettleType is assigned before Initialize
-        /// runs (SettlementPlacementCursorSnapshot.EvaluatePlacement), so it is authoritative
-        /// here, and a city placement activation is ignored entirely.
+        /// Activation baseline (postfix on Initialize, simulation thread): vanilla's valid
+        /// positions are final, so record the cursor slot and reserve the tail before refreshes
+        /// start. SettleType is assigned before Initialize runs, so it is authoritative here.
         /// </summary>
         public void NoteActivation(CampPlacementEvaluation evaluation)
         {
             if (evaluation.SettleType != ArmyActionType.CreateCamp)
             {
-                // FoundCity / FoundCityWithSettler: no resize, no tail, no log. Release a tail an
-                // earlier camp session left on this same evaluation: vanilla scores
-                // ValidTiles[0..Length), not [0..ValidTileCount), and skips only entries under 25
-                // FIMS (CampPlacementEvaluation.MinimalFimsForCampPlacement), so surviving camp
-                // picks would compete with real city candidates for the best-placement slots.
+                // Vanilla scores ValidTiles[0..Length), not [0..ValidTileCount), and skips only
+                // entries under 25 FIMS, so surviving camp picks would compete with real city
+                // candidates. Scrub the tail an earlier camp session left on this evaluation.
                 ReleaseTail(evaluation);
                 return;
             }
@@ -81,17 +64,14 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Rewrite the pick slots in place (ascending unique tiles, simulation thread).
-        /// When the cursor tile is one of the picks, also own CurrentPositionIndex: vanilla's
-        /// UpdateCurrentPosition found the cursor tile at a slot this Write overwrites, so
-        /// repoint it at the pick slot holding the cursor tile (the ghost preview must land
-        /// on the cursor tile, not on whatever pick now occupies the old index). Camp placement
-        /// only: the gate at the top of the method makes a non-camp evaluation a clean return.
+        /// Rewrite the pick slots in place (ascending unique tiles, simulation thread). If the
+        /// cursor tile is a pick, repoint CurrentPositionIndex at that pick's slot so the ghost
+        /// stays on the cursor tile. Non-camp evaluations return without writing.
         /// </summary>
         public void Write(CampPlacementEvaluation evaluation, Pick[] picks, int cursorTile)
         {
             if (evaluation.SettleType != ArmyActionType.CreateCamp)
-                return; // the writer's only mutating entry point: the no-op is self-enforcing
+                return;
 
             var tiles = evaluation.ValidTiles;
             int count = evaluation.ValidTileCount;
@@ -128,8 +108,7 @@ namespace SettlementPlacementAdvisor
                 }
             }
 
-            // Picks in place at invariant slots. The cursor slot (m_TailStart) is never
-            // written: it is vanilla's own cursor entry slot after a full-eval Initialize.
+            // Picks go at invariant slots; TailStart itself is vanilla's cursor entry slot.
             for (int i = 0; i < picks.Length; i++)
             {
                 var entry = picks[i].Data;
@@ -156,19 +135,16 @@ namespace SettlementPlacementAdvisor
             evaluation.ValidTileCount = needed;
         }
 
-        /// <summary>Drop the advisor's contribution (advisor inactive / guard path).</summary>
+        /// <summary>Drop the advisor's contribution (inactive or failure path).</summary>
         public void ClearTail(CampPlacementEvaluation evaluation)
         {
             Write(evaluation, s_Empty, -1);
         }
 
         /// <summary>
-        /// Scrub the slots this advisor reserved (never vanilla's), for a release that has to
-        /// survive a mode switch. Write() lowers the count but keeps its slot entries, and
-        /// vanilla's Initialize only ever lowers ValidTileCount, so a later non-camp session on
-        /// the same evaluation would still see them: its best-placement loop runs over
-        /// ValidTiles.Length and skips only entries under 25 FIMS. Zeroed entries are skipped;
-        /// no-op when no tail was reserved.
+        /// Scrub only the slots this advisor reserved. Needed on a mode switch because Write
+        /// lowers the count but keeps its entries, and vanilla Initialize never zeroes them.
+        /// Zeroed entries are skipped by vanilla; no-op when no tail was reserved.
         /// </summary>
         private void ReleaseTail(CampPlacementEvaluation evaluation)
         {
