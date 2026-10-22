@@ -12,14 +12,19 @@
     <Nullable>disable</Nullable>
     <DebugType>none</DebugType>
     <Version>0.1.0</Version>
-    <!-- Game ships its own copies of these; don't export them. -->
-    <NoWarn>CS0436;CS0618</NoWarn>
+    <!-- The game ships its own copies of the referenced assemblies: Private=false keeps
+         them out of the output. CS0436 stays enabled: it is the loud signal for
+         decompiled game sources leaking into this compile. -->
+    <NoWarn>CS0618</NoWarn>
   </PropertyGroup>
 
-  <!-- Debug harness sources live under scripts/ (own projects): keep them and their
-       generated obj/ files out of this project's default compile glob. -->
+  <!-- Debug harness sources live under scripts/ (own projects) and the decompiled game
+       cache lives under reference/ (gitignored): keep both, their generated obj/ files and
+       all cache content out of this project's default item globs. -->
   <ItemGroup>
     <Compile Remove="scripts/**/*.cs" />
+    <Compile Remove="reference/**/*.cs" />
+    <None Remove="reference/**" />
   </ItemGroup>
 
   <!-- Paths; override GameDir with -p:GameDir=... if the install moves. -->
