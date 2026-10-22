@@ -1,6 +1,6 @@
 using System;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// THE PUBLISHED PICK SET: an immutable snapshot of the tiles the advisor selected for the

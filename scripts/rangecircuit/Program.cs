@@ -4,7 +4,7 @@ using Amplitude;
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency
 using Amplitude.Mercury.Simulation;
-using CampPlacementAdvisor;
+using SettlementPlacementAdvisor;
 using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition;
 
 /// <summary>

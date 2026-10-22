@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Camp Placement Advisor mod and deploy it to the game's BepInEx/plugins folder.
+# Build the Settlement Placement Advisor mod and deploy it to the game's BepInEx/plugins folder.
 # The csproj copies the DLL into the game directory itself (CopyToPlugins target).
 set -euo pipefail
 
@@ -8,4 +8,4 @@ export DOTNET_ROOT
 export PATH="$DOTNET_ROOT:$PATH"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-dotnet build "$here/CampPlacementAdvisor.csproj" -c Release "$@"
+dotnet build "$here/SettlementPlacementAdvisor.csproj" -c Release "$@"

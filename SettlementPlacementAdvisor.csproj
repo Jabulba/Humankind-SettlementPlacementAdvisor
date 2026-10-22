@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Standalone UI mod: camp placement advisor. Build: scripts/build-advisor.sh
+  <!-- Standalone UI mod: settlement placement advisor. Build: scripts/build-advisor.sh
        Rules: README.md; module vocabulary: GLOSSARY.md.
        Independent of the brain-harness projects; issues no orders. -->
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>7.3</LangVersion>
-    <AssemblyName>CampPlacementAdvisor</AssemblyName>
-    <RootNamespace>CampPlacementAdvisor</RootNamespace>
+    <AssemblyName>SettlementPlacementAdvisor</AssemblyName>
+    <RootNamespace>SettlementPlacementAdvisor</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Nullable>disable</Nullable>
     <DebugType>none</DebugType>

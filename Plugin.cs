@@ -3,10 +3,10 @@ using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Camp Placement Advisor: while the camp (outpost) placement cursor is active,
+    /// Settlement Placement Advisor: while the camp (outpost) placement cursor is active,
     /// shows recommended-tile stars for the hovered territory (top 2) and for every
     /// territory in the adjacency range (top 1 each, RangeLevels = 2 by default), with FIMS
     /// pins, mandatory counts that ignore the vanilla minimum-FIMS gate. No orders: it only
@@ -16,8 +16,8 @@ namespace CampPlacementAdvisor
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "com.jabulba.campplacementadvisor";
-        public const string PluginName = "CampPlacementAdvisor";
+        public const string PluginGuid = "com.jabulba.settlementplacementadvisor";
+        public const string PluginName = "SettlementPlacementAdvisor";
         public const string PluginVersion = "0.1.0";
 
         internal static ConfigEntry<int> CfgTopHovered;
@@ -32,7 +32,7 @@ namespace CampPlacementAdvisor
 
         internal void Log(string message)
         {
-            Logger.LogInfo("[CampPlacementAdvisor] " + message);
+            Logger.LogInfo("[SettlementPlacementAdvisor] " + message);
         }
 
         private void Awake()

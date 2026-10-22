@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using Amplitude.Mercury.Interop;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// THE EVALUATION WRITER: puts the computed picks into the game's camp placement

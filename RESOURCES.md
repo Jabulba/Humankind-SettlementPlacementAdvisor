@@ -1,4 +1,4 @@
-# Camp Placement Advisor Resources
+# Settlement Placement Advisor Resources
 
 ## Knowledge
 

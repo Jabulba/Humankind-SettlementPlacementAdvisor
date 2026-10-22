@@ -9,7 +9,7 @@ using AiSnapshots = Amplitude.Mercury.Interop.AI.Snapshots; // public AI snapsho
 using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition; // edge transition flags
 using HarmonyLib;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// THE GAME SURFACE adapter: reflection over the game members behind the GameSurface

@@ -4,7 +4,7 @@ using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation;
 using HarmonyLib;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// Patch 1 (simulation thread): after the vanilla placement evaluation and current-position

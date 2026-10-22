@@ -4,7 +4,7 @@ using Amplitude; // FixedPoint (namespace Amplitude, assembly Amplitude.Framewor
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>One advisor pick: the tile, its weighted score, and vanilla's evaluation record for it.</summary>
     internal struct Pick

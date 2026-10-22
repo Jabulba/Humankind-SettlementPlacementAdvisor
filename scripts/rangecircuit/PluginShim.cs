@@ -1,4 +1,4 @@
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// DEBUG-harness stand-in for the BepInEx plugin class: GameApi.Fail logs through

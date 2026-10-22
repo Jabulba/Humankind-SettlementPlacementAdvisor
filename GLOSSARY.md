@@ -1,6 +1,6 @@
 # Glossary
 
-Domain terms for the camp placement advisor. Architecture vocabulary (module, interface,
+Domain terms for the settlement placement advisor. Architecture vocabulary (module, interface,
 depth, seam, adapter, leverage, locality) lives in the codebase-design skill; this file
 names the domain and the modules at its seams.
 

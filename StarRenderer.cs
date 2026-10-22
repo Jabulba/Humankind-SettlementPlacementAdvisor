@@ -5,7 +5,7 @@ using PresentationRoot = Amplitude.Mercury.Presentation.Presentation;
 using FeedbackController = Amplitude.Mercury.Presentation.PresentationTileFeedbackController;
 using BuildEnums = Amplitude.Mercury.Data.Presentation.PresentationEntityLevelBuildEnums;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// THE PICK CANVAS: where the star renderer puts and removes tile feedback fx. Keeps the
@@ -26,7 +26,7 @@ namespace CampPlacementAdvisor
 
     internal sealed class UnityPickCanvas : PickCanvas
     {
-        private StaticString m_Group = new StaticString("CampPlacementAdvisorGroup");
+        private StaticString m_Group = new StaticString("SettlementPlacementAdvisorGroup");
 
         public bool Available
         {

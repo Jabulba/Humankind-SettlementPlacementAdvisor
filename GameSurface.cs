@@ -2,7 +2,7 @@ using Amplitude; // FixedPoint (assembly Amplitude.Framework.dll)
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation; // SimulationEntityGUID
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// THE GAME SURFACE: every game fact the advisor needs to compute a pick, as one seam.

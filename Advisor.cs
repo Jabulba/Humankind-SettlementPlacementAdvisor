@@ -2,7 +2,7 @@ using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
 using Amplitude.Mercury.Simulation;
 
-namespace CampPlacementAdvisor
+namespace SettlementPlacementAdvisor
 {
     /// <summary>
     /// THE ADVISOR: simulation-thread orchestration from the vanilla placement refresh to a
