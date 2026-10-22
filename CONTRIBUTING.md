@@ -50,15 +50,23 @@ subject, `fix` without a body.
 
 ## Feed and CI
 
-Restore resolves the compile-time game assemblies from the private
+Restore resolves compile-time game assemblies from the private
 `Humankind.GameLibs` package: feed
 `https://nuget.pkg.github.com/Jabulba/index.json`, repo `Jabulba/Humankind-GameLibs`.
+Package content: every `Humankind_Data/Managed` DLL + `BepInEx/core` DLLs (minus
+`0Harmony20`, which duplicates 0Harmony types and breaks compiles). Version =
+game build number, `-rN` = package revision. Pins are exact brackets
+(`Version="[1.0.31.4851-r2]"`): bare pins float upward in NuGet semantics.
 Authentication: `GITHUB_TOKEN` env var (interpolated in `nuget.config`).
 
 - CI: per-run `GITHUB_TOKEN` (`packages: read`); nothing to set up.
-- Local: export a PAT with `read:packages` as `GITHUB_TOKEN` in your shell profile.
+- Local: export a PAT with `read:packages` as `GITHUB_TOKEN` in your shell profile
+  (`export GITHUB_TOKEN=$(gh auth token)`); `nuget.config` also carries the local
+  folder feed `../Humankind-GameLibs/pkg`, so local builds stay green while the
+  GitHub Packages index propagates (a first CI restore right after a publish can
+  fail with NU1102 for a few minutes; repushing a `-rN` bump does not fix that).
 - Game update: repack with `scripts/publish-gamelibs.sh <game-build-number>` using a
-  PAT with `write:packages`; the package version records the game build the DLLs came from.
+  PAT with `write:packages`, then bump the exact pins in all three csproj files.
 
 Push CI (`.github/workflows/push.yml`): commit-message lint over the pushed range,
 Release build, `scripts/test-range.sh`.
