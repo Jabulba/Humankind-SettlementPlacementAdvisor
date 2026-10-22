@@ -28,6 +28,8 @@
   Generates GitHub Release notes from commit messages at tag time (`cliff.toml`). Use for: releases.
 - [MinVer](https://github.com/adamralph/minver)
   Derives the assembly version from git tags; untagged builds report `0.0.0-alpha.0.<n>`. Use for: version questions.
+- Local: private repo `Jabulba/Humankind-GameLibs` + GitHub Packages feed
+  Compile-time/runtime game + BepInEx assemblies for mod builds (CONTRIBUTING.md: Feed and CI). Use for: reference resolution, game updates.
 
 ## Wisdom (Communities)
 
