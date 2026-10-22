@@ -20,7 +20,6 @@ namespace CampPlacementAdvisor
         public const string PluginName = "CampPlacementAdvisor";
         public const string PluginVersion = "0.1.0";
 
-        internal static ConfigEntry<bool> CfgEnabled;
         internal static ConfigEntry<int> CfgTopHovered;
         internal static ConfigEntry<int> CfgTopNeighbour;
         internal static ConfigEntry<int> CfgRangeLevels;
@@ -40,8 +39,6 @@ namespace CampPlacementAdvisor
         {
             Instance = this;
 
-            CfgEnabled = Config.Bind("General", "Enabled", true,
-                "Enable the camp placement advisor. False = pure vanilla behavior.");
             CfgTopHovered = Config.Bind("Advisor", "TopHovered", 2,
                 "Recommended tiles shown on the hovered territory; count is mandatory, below-minimum-FIMS tiles are included. The tile under the mouse ghost counts visually on top of this.");
             CfgTopNeighbour = Config.Bind("Advisor", "TopNeighbour", 1,

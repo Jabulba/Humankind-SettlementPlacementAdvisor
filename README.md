@@ -21,7 +21,7 @@ counts that ignore the vanilla minimum-FIMS gate, exploration filtering, and no 
 Requires the dotnet SDK at `~/.dotnet` (script sets `DOTNET_ROOT`/`PATH`). Game install path is set by `GameDir` in the
 csproj (override with `-p:GameDir=...`). BepInEx only loads plugins at process start: after a rebuild, restart the game.
 
-Config: `BepInEx/config/com.jabulba.campplacementadvisor.cfg` (`Enabled`, `TopHovered=2`, `TopNeighbour=1`,
+Config: `BepInEx/config/com.jabulba.campplacementadvisor.cfg` (`TopHovered=2`, `TopNeighbour=1`,
 `RangeLevels=2`: center counts as level 1, so 2 = hovered + adjacent, 3 adds adjacent-to-adjacent. Land adjacency only:
 sea, cliff and mountain edges never count as a range step.
 

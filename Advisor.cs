@@ -6,7 +6,7 @@ namespace CampPlacementAdvisor
 {
     /// <summary>
     /// THE ADVISOR: simulation-thread orchestration from the vanilla placement refresh to a
-    /// published pick set. Config gates, hovered territory derivation, pick computation,
+    /// published pick set. Readiness gates, hovered territory derivation, pick computation,
     /// evaluation writer, publish. No rule logic, no evaluation array writes, no presentation
     /// calls (the star renderer subscribes lazily from here).
     /// </summary>
@@ -27,7 +27,7 @@ namespace CampPlacementAdvisor
 
         public void Run(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
-            if (!Plugin.CfgEnabled.Value || !m_Game.Ready)
+            if (!m_Game.Ready)
             {
                 PublishEmpty(evaluation);
                 return;
