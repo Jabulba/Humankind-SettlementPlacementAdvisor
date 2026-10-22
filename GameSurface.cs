@@ -24,6 +24,11 @@ namespace SettlementPlacementAdvisor
         /// <summary>Land + point-of-interest validity for a settlement site on the tile (sim thread).</summary>
         bool IsSettlementSiteTile(int tileIndex);
 
+        /// <summary>Water tile (fail closed: true when unknown). Sea-flagged territories can
+        /// host valid camp sites, so water is filtered per tile, never by the territory's
+        /// ocean flag (observed: a sea-flagged territory held all 25 valid camp sites).</summary>
+        bool IsTileWater(int tileIndex);
+
         /// <summary>Tile scouted by the given empire (cache invalidation via VisibilityFrame).</summary>
         bool IsTileExplored(int tileIndex, int empireIndex);
 
@@ -41,11 +46,13 @@ namespace SettlementPlacementAdvisor
         int TerritoryOfTile(int tileIndex);
 
         /// <summary>
-        /// Territory facts (sim thread): ocean flag, claimed flag, settlement-site tiles. False =
+        /// Territory facts (sim thread): claimed flag and settlement-site tiles. False =
         /// territory unknown (fail closed: never advise an unknown territory). The tiles view
         /// belongs to the snapshot: read-only, valid for the current refresh, not a retention.
+        /// No ocean flag: it is territory metadata that misfires on sea-flagged territories
+        /// hosting land camp sites; see IsTileWater.
         /// </summary>
-        bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles);
+        bool GetTerritoryFacts(int territoryIndex, out bool isClaimed, out int[] tiles);
 
         /// <summary>
         /// Land-adjacent territory indexes: only the edges a ground army crosses

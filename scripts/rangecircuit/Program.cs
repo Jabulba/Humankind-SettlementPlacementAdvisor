@@ -29,6 +29,7 @@ internal sealed class GraphSurface : GameSurface
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
     public int GetArmyEmpireIndex(object army) { return 0; }
     public bool IsSettlementSiteTile(int tileIndex) { return true; }
+    public bool IsTileWater(int tileIndex) { return false; }
     public bool IsTileExplored(int tileIndex, int empireIndex) { return true; }
 
     public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
@@ -52,14 +53,13 @@ internal sealed class GraphSurface : GameSurface
         return (t < 0 || t >= TerritoryCount) ? -1 : t;
     }
 
-    public bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles)
+    public bool GetTerritoryFacts(int territoryIndex, out bool isClaimed, out int[] tiles)
     {
         if (territoryIndex < 0 || territoryIndex >= TerritoryCount)
         {
-            isOcean = true; isClaimed = true; tiles = new int[0];
+            isClaimed = true; tiles = new int[0];
             return false;
         }
-        isOcean = IsOcean[territoryIndex];
         isClaimed = false;
         tiles = new int[] { 100 + territoryIndex * 10, 101 + territoryIndex * 10, 102 + territoryIndex * 10 };
         return true;

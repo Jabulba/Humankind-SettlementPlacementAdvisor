@@ -14,12 +14,14 @@ using SettlementPlacementAdvisor;
 internal sealed class GraphSurface : GameSurface
 {
     public bool ReadyFlag = true;
-    public bool AllClaimed; // C2: report every territory as claimed
+    public bool AllOcean; // C3: report every territory as sea-flagged
+    public bool AllWater; // C2: report every tile as water
 
     public bool Ready { get { return ReadyFlag; } }
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
     public int GetArmyEmpireIndex(object army) { return 0; }
     public bool IsSettlementSiteTile(int tileIndex) { return true; }
+    public bool IsTileWater(int tileIndex) { return AllWater; }
     public bool IsTileExplored(int tileIndex, int empireIndex) { return true; }
 
     public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
@@ -45,9 +47,9 @@ internal sealed class GraphSurface : GameSurface
         return (t < 0 || t > 3) ? -1 : t;
     }
 
-    public bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles)
+    public bool GetTerritoryFacts(int territoryIndex, out bool isClaimed, out int[] tiles)
     {
-        isOcean = false; isClaimed = AllClaimed;
+        isClaimed = false;
         tiles = new int[] { 100 + territoryIndex * 10 + 1, 100 + territoryIndex * 10 + 2, 100 + territoryIndex * 10 + 3 };
         return true;
     }
@@ -173,7 +175,6 @@ internal static class Program
         plugin.Stars = new StarRenderer(canvas);
         plugin.Advisor = new Advisor(surface, new PickComputation(surface), plugin.Writer, plugin.Stars);
         Plugin.Instance = plugin;
-
         const int baseline = 6;
 
         // A. FoundCity: the advisor never touches the evaluation, in any entry point.
@@ -262,11 +263,11 @@ internal static class Program
         PickSet.Current = null;
         Gate("no pick set at all: vanilla answer survives", true, bestTile, true);
 
-        // C2. Zero-pick publish (all in-range territories claimed): the advisor must
+        // C2. Zero-pick publish (all in-range territories claimed/all-water): the advisor must
         // deactivate, NOT publish an active empty set, because an active set suppresses the
         // vanilla best pins without replacing them (observed in-game: only the hovered tile
         // keeps its FIMS pin).
-        surface.AllClaimed = true;
+        surface.AllWater = true;
         surface.DistrictFrame++; // cache-key bump: per-territory caches must miss
         Refresh(settlement, 130);
         Check("zero-pick refresh deactivates the pick set (no active empty set)", Inactive());
@@ -282,8 +283,21 @@ internal static class Program
         Check("zero-pick refresh leaves no pick entries inside the valid window",
             Inactive() && foreignSlots == 0);
         Gate("zero-pick refresh: vanilla best pin survives", true, bestTile, true);
-        surface.AllClaimed = false;
-        surface.DistrictFrame++; // restore: later blocks expect land tiles
+
+        // C3. Sea-flagged territory hosting land camp sites (observed in-game: all 25 valid
+        // camp sites sat in a territory the AI snapshot flags IsOcean): the advisor must
+        // publish its picks from it; water is filtered per tile, never by the territory flag.
+        surface.AllWater = false; surface.AllOcean = true; // land tiles inside a sea-flagged territory
+        surface.DistrictFrame++;
+        Refresh(settlement, 133);
+        Check("sea-flagged territory with land tiles publishes picks",
+            !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+        Gate("sea-flagged territory: pick pins are forced", false, 132, true);
+        surface.AllOcean = false;
+        surface.DistrictFrame++;
+        Refresh(settlement, 134); // restore: land picks on the same tiles
+        Check("flag off restores the same picks",
+            !Inactive());
 
         // D. The !Ready half of the Run gate: a not-ready refresh writes nothing in either mode
         // and deactivates.

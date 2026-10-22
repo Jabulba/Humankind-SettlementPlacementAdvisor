@@ -134,6 +134,22 @@ namespace SettlementPlacementAdvisor
             }
         }
 
+        public bool IsTileWater(int tileIndex)
+        {
+            try
+            {
+                var world = AiSnapshots.World;
+                var tiles = world == null ? null : world.Tiles;
+                if (tiles == null || tileIndex < 0 || tileIndex >= tiles.Length) return true;
+                return tiles[tileIndex].IsWater;
+            }
+            catch (Exception e)
+            {
+                Fail("tile water lookup: " + e.Message);
+                return true;
+            }
+        }
+
         public object TryGetArmy(SimulationEntityGUID guid)
         {
             try
@@ -249,9 +265,8 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        public bool GetTerritoryFacts(int territoryIndex, out bool isOcean, out bool isClaimed, out int[] tiles)
+        public bool GetTerritoryFacts(int territoryIndex, out bool isClaimed, out int[] tiles)
         {
-            isOcean = true;
             isClaimed = true;
             tiles = s_NoTiles;
             try
@@ -260,7 +275,6 @@ namespace SettlementPlacementAdvisor
                 var territories = world == null ? null : world.Territories;
                 if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length) return false;
                 var territory = territories[territoryIndex];
-                isOcean = territory.IsOcean;
                 isClaimed = territory.Info.Claimed;
                 var siteTiles = territory.TileIndexes;
                 if (siteTiles != null) tiles = siteTiles;

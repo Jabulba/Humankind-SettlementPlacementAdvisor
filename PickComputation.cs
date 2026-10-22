@@ -186,10 +186,10 @@ namespace SettlementPlacementAdvisor
 
             var picks = new List<Pick>(topCount);
             var truncated = false;
-            bool isOcean, isClaimed;
+            bool isClaimed;
             int[] tiles;
-            if (m_Game.GetTerritoryFacts(territoryIndex, out isOcean, out isClaimed, out tiles)
-                && !isOcean && !isClaimed)
+            if (m_Game.GetTerritoryFacts(territoryIndex, out isClaimed, out tiles)
+                && !isClaimed)
             {
                 var evaluated = new List<Pick>(tiles.Length);
                 for (int i = 0; i < tiles.Length; i++)
@@ -207,7 +207,7 @@ namespace SettlementPlacementAdvisor
                     m_Budget--;
 
                     var tile = tiles[i];
-                    if (!m_Game.IsSettlementSiteTile(tile)) continue;
+                    if (!m_Game.IsSettlementSiteTile(tile) || m_Game.IsTileWater(tile)) continue;
                     if (!m_Game.IsTileExplored(tile, empireIndex)) continue;
                     DistrictPlacementEvaluation.ValidTile validTile;
                     FixedPoint score;
