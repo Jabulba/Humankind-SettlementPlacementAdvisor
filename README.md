@@ -65,7 +65,9 @@ The default rules are:
 | Hovered territory | Top 2 tiles |
 | Each territory in range | Top 1 tile |
 
-A tile gets no star when it is unexplored, already owned, or ocean. The configured counts are
+A tile gets no star when it is unexplored, already owned, or water. Water is filtered per
+tile: sea-flagged territories can host valid camp sites, so the advisor never skips a
+territory for its ocean flag. The configured counts are
 mandatory rather than a minimum-FIMS filter: tiles below the vanilla minimum-FIMS threshold are
 still eligible.
 
@@ -126,7 +128,8 @@ Search for `SettlementPlacementAdvisor`.
 | Symptom | Check |
 |---|---|
 | No stars at all | Is the plugin loaded? Are you in settlement placement, not city founding? |
-| A territory has no stars | Tiles must be explored, unowned and land; ocean territories are skipped |
+| A territory has no stars | Tiles must be explored, unowned and non-water; claimed territories are skipped |
+| No recommendations anywhere on this hover | Vanilla recommendations take over when every territory in range has nothing to advise |
 | `Disabled, unresolved game members` | The game build changed; report the log and game version in an issue |
 | Nothing appears until the cursor moves | The mod wires star rendering on the first settlement placement refresh |
 

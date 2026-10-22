@@ -53,12 +53,13 @@ the domain and the modules at its seams.
   cache (frames read from the game surface at compute time, never threaded by callers),
   the evaluation budget, count clamping, ranking, and truncation. No side effects.
 - **Game surface** (`GameSurface`): the seam over the game's internals: tile
-  settlement capability, exploration, per-tile placement evaluation, frame counters, army lookup,
-  and the territory graph (territory of a tile, ocean/claimed flags, settlement-site tiles,
-  land adjacencies). The adapter (`GameApi`) satisfies it in the game: reflection for the
-  simulation internals, the public AI snapshot for the territory graph (its land filter
-  keeps the `Open` transition edges). Territory facts fail closed: an unknown territory
-  never advises.
+  settlement capability, per-tile water, exploration, per-tile placement evaluation, frame
+  counters, army lookup, and the territory graph (territory of a tile, claimed flag,
+  settlement-site tiles, land adjacencies). The adapter (`GameApi`) satisfies it in the game:
+  reflection for the simulation internals, the public AI snapshot for the territory graph (its
+  land filter keeps the `Open` transition edges). Water is a per-tile fact: sea-flagged
+  territories can host valid camp sites, so the advisor never filters by the territory ocean
+  flag. Territory facts fail closed: an unknown territory never advises.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
   evaluation. Writes pick slots in place, barriers, then raises `ValidTileCount`; owns
   `CurrentPositionIndex` when the cursor tile is a pick. Reserves tail capacity at
