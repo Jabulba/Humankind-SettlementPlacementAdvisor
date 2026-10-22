@@ -10,9 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
     env:
-      GITHUB_TOKEN: ${{ github.token }}
+      GAMELIBS_PAT: ${{ secrets.GAMELIBS_PAT }}
     steps:
       - uses: actions/checkout@v4
         with:

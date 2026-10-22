@@ -57,16 +57,19 @@ Package content: every `Humankind_Data/Managed` DLL + `BepInEx/core` DLLs (minus
 `0Harmony20`, which duplicates 0Harmony types and breaks compiles). Version =
 game build number, `-rN` = package revision. Pins are exact brackets
 (`Version="[1.0.31.4851-r2]"`): bare pins float upward in NuGet semantics.
-Authentication: `GITHUB_TOKEN` env var (interpolated in `nuget.config`).
+Authentication: `GAMELIBS_PAT` env var (interpolated in `nuget.config`).
 
-- CI: per-run `GITHUB_TOKEN` (`packages: read`); nothing to set up.
-- Local: export a PAT with `read:packages` as `GITHUB_TOKEN` in your shell profile
-  (`export GITHUB_TOKEN=$(gh auth token)`). Add the machine-only folder feed
-  `<path-to>/Humankind-GameLibs/pkg` to `~/.nuget/NuGet/NuGet.Config` (not the repo's
-  `nuget.config`: NuGet hard-errors on a missing source in CI, and the repo config has
-  no `<clear/>`, so machine sources merge in). Folder feed = instant local restore;
-  the GitHub Packages index needs minutes to propagate after a publish, so CI restore
-  can fail with NU1102 right after one; rerun the workflow, do not republish.
+- CI: repo secret `GAMELIBS_PAT` (PAT with `read:packages`), exported as env in both
+  workflows. Public-repo `GITHUB_TOKEN` gets 403 on personal-account private packages
+  (upstream limitation).
+- Local: export a PAT with `read:packages` as `GAMELIBS_PAT` in your shell profile
+  (`export GAMELIBS_PAT=$(gh auth token)`).
+- Machine-only folder feed: add `<path-to>/Humankind-GameLibs/pkg` to
+  `~/.nuget/NuGet/NuGet.Config`, not to the repo's `nuget.config` (NuGet hard-errors
+  on a missing source in CI, and the repo config has no `<clear/>` so machine sources
+  merge in). The folder feed makes local restore instant; the GitHub Packages index
+  needs minutes to propagate after a publish, so a CI restore right after one can
+  fail with NU1102: rerun the workflow, do not republish.
 - Game update: repack with `scripts/publish-gamelibs.sh <game-build-number>` using a
   PAT with `write:packages`, then bump the exact pins in all three csproj files.
 
