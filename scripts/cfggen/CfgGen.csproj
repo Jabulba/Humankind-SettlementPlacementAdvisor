@@ -16,18 +16,15 @@
     <NoWarn>CS0436;CS1701;CS1702;MSB3277</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <GameDir Condition="'$(GameDir)' == ''">/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind</GameDir>
-    <BepInExCoreDir>$(GameDir)/BepInEx/core</BepInExCoreDir>
-  </PropertyGroup>
-
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="..\..\AdvisorConfig.cs" />
   </ItemGroup>
-
   <ItemGroup>
-    <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)/BepInEx.dll</HintPath><Private>true</Private></Reference>
+    <!-- BepInEx ConfigFile from the GameLibs feed (same shipped assembly the game
+         writes configs with; runtime asset needed, headless tool). -->
+    <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" />
   </ItemGroup>
+
 
 </Project>

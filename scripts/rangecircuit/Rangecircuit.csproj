@@ -14,11 +14,6 @@
     <NoWarn>CS0436;CS0618;MSB3277;CS0649</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <GameDir Condition="'$(GameDir)' == ''">/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind</GameDir>
-    <GameManagedDir>$(GameDir)/Humankind_Data/Managed</GameManagedDir>
-    <BepInExCoreDir>$(GameDir)/BepInEx/core</BepInExCoreDir>
-  </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Program.cs" />
@@ -29,12 +24,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="Amplitude.Mercury.Firstpass"><HintPath>$(GameManagedDir)/Amplitude.Mercury.Firstpass.dll</HintPath><Private>true</Private></Reference>
-    <Reference Include="Amplitude.Mercury.Data"><HintPath>$(GameManagedDir)/Amplitude.Mercury.Data.dll</HintPath><Private>true</Private></Reference>
-    <Reference Include="Amplitude"><HintPath>$(GameManagedDir)/Amplitude.dll</HintPath><Private>true</Private></Reference>
-    <Reference Include="Amplitude.Core"><HintPath>$(GameManagedDir)/Amplitude.Core.dll</HintPath><Private>true</Private></Reference>
-    <Reference Include="Amplitude.Framework"><HintPath>$(GameManagedDir)/Amplitude.Framework.dll</HintPath><Private>true</Private></Reference>
-    <Reference Include="0Harmony"><HintPath>$(BepInExCoreDir)/0Harmony.dll</HintPath><Private>true</Private></Reference>
+    <!-- Game + BepInEx assemblies from the private GameLibs feed (nuget.config
+         inheritance from repo root): version pin = game build. Runtime copies are
+         Private=true equivalents: the harness runs headless against these DLLs. -->
+    <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" />
   </ItemGroup>
 
 </Project>

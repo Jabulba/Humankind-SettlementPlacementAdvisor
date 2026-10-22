@@ -38,63 +38,12 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" />
+    <!-- Compile-time game + BepInEx assemblies from the private GameLibs feed
+         (nuget.config; CONTRIBUTING.md): version = game build, runtime assets
+         excluded, the game ships its own copies. -->
+    <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
 
-  <!-- BepInEx + Harmony (provided at runtime) -->
-  <ItemGroup>
-    <Reference Include="BepInEx">
-      <HintPath>$(BepInExCoreDir)/BepInEx.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(BepInExCoreDir)/0Harmony.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
-
-  <!-- Unity engine (from the game) -->
-  <ItemGroup>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(GameManagedDir)/UnityEngine.CoreModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(GameManagedDir)/UnityEngine.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
-
-  <!-- Game logic:
-       Firstpass: CampPlacementEvaluation, DistrictPlacementEvaluation, FimsInfo, AI Snapshots,
-                  SimulationEntityGUID, WorldPosition.
-       Amplitude.Mercury.Data: ArmyActionType enum.
-       Amplitude: StaticString. Amplitude.Framework: FixedPoint (Amplitude.Core namespace). -->
-  <ItemGroup>
-    <Reference Include="Amplitude.Mercury.Firstpass">
-      <HintPath>$(GameManagedDir)/Amplitude.Mercury.Firstpass.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Amplitude.Mercury.Data">
-      <HintPath>$(GameManagedDir)/Amplitude.Mercury.Data.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Amplitude">
-      <HintPath>$(GameManagedDir)/Amplitude.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Amplitude.Core">
-      <HintPath>$(GameManagedDir)/Amplitude.Core.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Amplitude.Framework">
-      <HintPath>$(GameManagedDir)/Amplitude.Framework.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(GameManagedDir)/Assembly-CSharp.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
 
   <Target Name="CopyToPlugins" AfterTargets="Build">
     <MakeDir Directories="$(BepInExPluginsDir)" />
