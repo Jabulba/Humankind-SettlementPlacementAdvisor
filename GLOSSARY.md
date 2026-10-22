@@ -6,14 +6,17 @@ names the domain and the modules at its seams.
 
 ## Domain
 
+- **Placement mode**: which settlement action a placement session is running
+  (`ArmyActionType`): `CreateCamp` for camp/outpost placement, `FoundCity` and
+  `FoundCityWithSettler` for city founding. All three share the game's
+  `CampPlacementEvaluation` type, so the advisor's patch sees city sessions too. The
+  advisor's contract: camp placement is the only mode it writes; on every other mode it is
+  a strict no-op — it never writes, resizes, or re-styles that evaluation, and it hands its
+  pin gate back to vanilla. A camp tail left on the shared evaluation is released on the
+  next city activation (see Tail).
 - **Refresh**: one pass of the placement snapshot sync: vanilla full eval (only at
   activation / district change) and `UpdateCurrentPosition` (every mouse move). The advisor
   hooks `UpdateCurrentPosition`, so a refresh means "the cursor position was processed".
-- **Placement mode**: the settle type of the active placement cursor (`CreateCamp`,
-  `FoundCity`, `FoundCityWithSettler`). All three share `CampPlacementEvaluation`, so the
-  advisor's contract is explicit: it advises in camp placement and is a STRICT NO-OP in every
-  other mode, never writing, resizing, or re-styling that evaluation, and handing its pin
-  gate back to vanilla.
 - **Hovered territory**: the territory owning the tile under the placement cursor. Level 1
   of the range.
 - **Range territories**: territories reachable from the hovered territory in the
@@ -32,8 +35,9 @@ names the domain and the modules at its seams.
   pick set. The only channel from the simulation thread to the presentation thread.
 - **Publish**: swap a new pick set into the volatile channel. Only on pick-content change;
   identical content publishes nothing and bumps no version. An INACTIVE publish is the
-  advisor's deactivation: it stops its own stars and hands the pin gate back to vanilla, and
-  it is the only thing the advisor does on a placement mode it does not own.
+  advisor's deactivation: the presentation stops the advisor's stars and the FIMS pin gate
+  returns its answer to vanilla. It is the only thing the advisor does on a placement mode
+  it does not own.
 - **Tail**: the FIXED slot window in `CampPlacementEvaluation.ValidTiles` owned by the
   evaluation writer, reserved at activation. Base slot = the cursor slot: vanilla's own
   append point after a full-eval `Initialize` (`UpdateCurrentPosition` appends the cursor
@@ -44,12 +48,6 @@ names the domain and the modules at its seams.
   that changes between refreshes inside one pick set. Vanilla scores the tail slots of a
   mode it owns too: its best-placement loop runs over the array length, not the valid
   count, so a tail released by a mode switch has to be scrubbed, not just counted down.
-- **Placement mode**: which settlement action a placement session is running
-  (`ArmyActionType`): `CreateCamp` for camp/outpost placement, `FoundCity` and
-  `FoundCityWithSettler` for city founding. All three share the game's
-  `CampPlacementEvaluation` type, so the advisor's patch sees city sessions too. The
-  advisor's contract: camp placement is the only mode it writes, and it leaves no state
-  behind for the other modes.
 
 ## Modules
 
@@ -68,10 +66,8 @@ names the domain and the modules at its seams.
   evaluation. Tail protocol: write the pick slots in place, barrier, raise
   `ValidTileCount`; own `CurrentPositionIndex` when the cursor tile is one of the picks.
   Reserves tail capacity in the activation patch; suppresses vanilla placement glyphs.
-  Camp placement writes only: the mutating entry point guards on `SettleType`, so the
-  FoundCity and FoundCityWithSettler sessions that share the evaluation type are never
-  written, resized, or re-styled; their activation gets the one cleanup they need from a
-  previous camp session, which is the release of the slots the advisor owns.
+  Camp placement writes only: the mutating entry point guards on `SettleType`, and a city
+  activation gets the one cleanup it needs, the release of the slots the advisor owns.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
   lazy snapshot subscription. Animates entering and leaving tiles only.
