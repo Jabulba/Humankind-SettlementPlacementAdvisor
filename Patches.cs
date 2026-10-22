@@ -10,7 +10,8 @@ namespace SettlementPlacementAdvisor
     /// Patch 1 (simulation thread): after the vanilla placement evaluation and current-position
     /// update, compute the advisor picks, hand them to the evaluation writer, and publish the
     /// pick set. The evaluation writer owns the ValidTiles tail and the vanilla glyph
-    /// suppression; the star renderer reacts to the published pick set.
+    /// suppression, and the advisor keeps both strictly inside camp placement: on a non-camp
+    /// evaluation, and on any failure, the postfix only deactivates our own pick set.
     /// </summary>
     [HarmonyPatch]
     internal static class CampEvaluationPatch
@@ -28,7 +29,7 @@ namespace SettlementPlacementAdvisor
             }
             catch (Exception e)
             {
-                Plugin.Instance.Advisor.PublishEmpty(__instance);
+                Plugin.Instance.Advisor.Deactivate(); // failure path never writes the evaluation
                 GameApi.Fail("UpdateCurrentPosition postfix: " + e.Message);
             }
         }
@@ -38,7 +39,9 @@ namespace SettlementPlacementAdvisor
     /// Patch 4 (simulation thread): the camp placement evaluation finished its activation
     /// (Initialize), so the vanilla valid positions are final. The evaluation writer records
     /// the baseline count and reserves the tail capacity exactly once, in the only window
-    /// where growing the array is safe (before the cursor starts refreshing).
+    /// where growing the array is safe (before the cursor starts refreshing). Initialize is
+    /// shared with FoundCity/FoundCityWithSettler, so the writer guards the reservation to
+    /// camp activations: a city placement gets no resize and no tail.
     /// </summary>
     [HarmonyPatch]
     internal static class EvaluationActivationPatch
@@ -80,7 +83,10 @@ namespace SettlementPlacementAdvisor
     /// <summary>
     /// Patch 2 (presentation thread): membership-only FIMS-pin gate. Pins show on every
     /// advisor pick in the published pick set; vanilla top-2 pins outside the set are
-    /// suppressed. Membership queries the captured snapshot instance, so the gate result is
+    /// suppressed. An INACTIVE pick set hands the gate back to vanilla: both representations
+    /// count (null instance, and the instance the advisor publishes when it deactivates,
+    /// Tiles == null), so city placement and every advisor-inactive refresh keep the vanilla
+    /// pin answer. Membership queries the captured snapshot instance, so the gate result is
     /// stable while the pick set content is stable (no per-mouse-move show/hide flips). The
     /// hovered cursor tile keeps its vanilla pin behavior.
     /// </summary>
@@ -95,7 +101,7 @@ namespace SettlementPlacementAdvisor
         private static void Postfix(ref bool __result, DistrictPlacementEvaluation.ValidTile info)
         {
             var set = PickSet.Current;
-            if (set == null) return;                                  // advisor inactive: vanilla gate
+            if (set == null || set.Tiles == null) return;             // advisor inactive: vanilla gate
             if (set.Contains(info.TileIndex)) { __result = true; return; }
 
             var snapshot = Snapshots.SettlementPlacementCursorSnapshot;

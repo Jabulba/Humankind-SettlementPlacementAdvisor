@@ -4,12 +4,17 @@ Standalone BepInEx mod: while the camp (outpost) placement cursor is active, sho
 hovered territory (top 2) and for every territory in the land-adjacency range (top 1 each), with FIMS pins, mandatory
 counts that ignore the vanilla minimum-FIMS gate, exploration filtering, and no stars on unexplored/owned/ocean tiles.
 
+Only camp placement is affected: founding a city (with or without a settler) shares the game's placement evaluation with camp
+placement, and the advisor never writes it — no stars, no pins, vanilla glyphs and cursor untouched, and a tail reserved by an
+earlier camp session is released when the city session starts.
+
 ## Layout
 
 - repo root — plugin source (`com.jabulba.settlementplacementadvisor`, net472)
 - `scripts/build-advisor.sh` — build; copies the DLL into the game's `BepInEx/plugins`
 - `scripts/launch-game.sh` — launch and boot detection
 - `scripts/test-range.sh` — range-rule harness (`scripts/rangecircuit`), non-zero exit on a range violation
+- `scripts/test-noop.sh` — no-op contract harness (`scripts/noopcircuit`), non-zero exit on any mutation of a non-camp evaluation
 - `scripts/decompile-game.sh` — decompile cache under `reference/` (gitignored, never committed); `<FullyQualifiedTypeName>` prints one type
 - `Directory.Build.props` — assembly references resolve from HintPaths and the target-framework directory only, never from copies inside the tree
 - `CONTRIBUTING.md` — commit standard, game-libs feed setup, versioning, releases
@@ -38,6 +43,10 @@ sea, cliff and mountain edges never count as a range step.
 Range-rule harness (`scripts/rangecircuit`): drives the real pick computation and the real land filter over synthetic
 territory graphs (land chain, land-sea-land, bay fan, cliff edge) and exits non-zero when a pick comes from a
 territory outside the land-adjacency range.
+
+No-op contract harness (`scripts/test-noop.sh`, `scripts/noopcircuit`): replays the real patch entry points on a
+city-placement evaluation and a camp one, and exits non-zero if the advisor touches the city evaluation, loses its camp
+tail behaviour, leaves the FIMS pin gate claimed while inactive, or leaks camp tail slots into a city session.
 
 Logs: grep `SettlementPlacementAdvisor` in `~/.local/share/Steam/steamapps/common/Humankind/BepInEx/LogOutput.log`;
 Awake-path exceptions appear only in the Proton prefix `Player.log`.

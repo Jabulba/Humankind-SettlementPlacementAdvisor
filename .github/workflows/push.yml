@@ -46,3 +46,6 @@ jobs:
 
       - name: Range harness
         run: bash scripts/test-range.sh
+
+      - name: No-op harness
+        run: bash scripts/test-noop.sh

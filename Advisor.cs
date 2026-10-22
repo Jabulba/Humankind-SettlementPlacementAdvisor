@@ -8,7 +8,9 @@ namespace SettlementPlacementAdvisor
     /// THE ADVISOR: simulation-thread orchestration from the vanilla placement refresh to a
     /// published pick set. Readiness gates, hovered territory derivation, pick computation,
     /// evaluation writer, publish. No rule logic, no evaluation array writes, no presentation
-    /// calls (the star renderer subscribes lazily from here).
+    /// calls (the star renderer subscribes lazily from here). Contract: the advisor is a
+    /// STRICT NO-OP on every evaluation it does not own, i.e. on all non-camp placement modes
+    /// (see Run), where it only ever deactivates its own pick set.
     /// </summary>
     internal sealed class Advisor
     {
@@ -27,14 +29,16 @@ namespace SettlementPlacementAdvisor
 
         public void Run(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
-            if (!m_Game.Ready)
+            // The camp placement evaluation is SHARED by FoundCity and FoundCityWithSettler
+            // (CampPlacementEvaluation.GetExtensionAndPackage switches on SettleType), and the
+            // vanilla glyph display consumes ValidTiles[0..ValidTileCount) with
+            // onlyShowShowable, so any write here would restyle city placement. Non-camp
+            // evaluations are untouched: only our own pick set is deactivated, so no advisor
+            // star survives into city placement and vanilla keeps its glyphs, pins and cursor
+            // entry exactly as if the mod were absent.
+            if (!m_Game.Ready || evaluation.SettleType != ArmyActionType.CreateCamp)
             {
-                PublishEmpty(evaluation);
-                return;
-            }
-            if (evaluation.SettleType != ArmyActionType.CreateCamp)
-            {
-                PublishEmpty(evaluation);
+                Deactivate();
                 return;
             }
 
@@ -74,6 +78,22 @@ namespace SettlementPlacementAdvisor
             PickSet.Publish(tiles);
         }
 
+        /// <summary>
+        /// Deactivate WITHOUT writing the evaluation: publish an inactive pick set only. Every
+        /// non-camp placement mode and every failure path take this route. Publishing an
+        /// already-inactive set publishes nothing, so per-mouse-move calls here are free.
+        /// </summary>
+        public void Deactivate()
+        {
+            PickSet.Publish(null);
+        }
+
+        /// <summary>
+        /// Camp placement only: drop the advisor's tail contribution, then deactivate. A
+        /// non-camp call is inert (the writer's gate returns before touching the array), but
+        /// keep it out of the non-camp paths so the intent stays visible at the call site:
+        /// those take Deactivate, which never touches an evaluation.
+        /// </summary>
         public void PublishEmpty(CampPlacementEvaluation evaluation)
         {
             m_Writer.ClearTail(evaluation);
