@@ -10,6 +10,7 @@ counts that ignore the vanilla minimum-FIMS gate, exploration filtering, and no 
 - `scripts/build-advisor.sh` — build; copies the DLL into the game's `BepInEx/plugins`
 - `scripts/launch-game.sh` — launch and boot detection
 - `scripts/test-range.sh` — range-rule harness (`scripts/rangecircuit`), non-zero exit on a range violation
+- `scripts/decompile-game.sh` — decompile cache under `reference/` (gitignored, never committed); `<FullyQualifiedTypeName>` prints one type
 - `Directory.Build.props` — assembly references resolve from HintPaths and the target-framework directory only, never from copies inside the tree
 
 ## Build & deploy
