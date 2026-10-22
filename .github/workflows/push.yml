@@ -1,0 +1,49 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint commit messages
+        run: |
+          base=$(git merge-base HEAD origin/main 2>/dev/null || true)
+          if [ -n "$base" ]; then
+            range="$base..HEAD"
+          else
+            range="HEAD"
+          fi
+          bad=0
+          tmp=$(mktemp)
+          for sha in $(git log --no-merges --pretty=%H "$range"); do
+            git log -1 --format=%B "$sha" > "$tmp"
+            if ! bash scripts/hooks/commit-msg "$tmp"; then
+              echo "::error::$(git log -1 --format='%h %s' "$sha") violates the commit standard (CONTRIBUTING.md)"
+              bad=1
+            fi
+          done
+          rm -f "$tmp"
+          exit "$bad"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build SettlementPlacementAdvisor.csproj -c Release
+
+      - name: Range harness
+        run: bash scripts/test-range.sh

@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build SettlementPlacementAdvisor.csproj -c Release
+
+      - name: Generate config
+        run: bash scripts/gen-cfg.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Package zip
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/pkg
+          cp bin/Release/SettlementPlacementAdvisor.dll LICENSE README.md \
+             dist/com.jabulba.settlementplacementadvisor.cfg dist/pkg/
+          (cd dist/pkg && zip -q "../SettlementPlacementAdvisor-${ver}.zip" *)
+
+      - name: Install git-cliff
+        run: |
+          curl -fsSL -o /tmp/gc.tgz \
+            https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf /tmp/gc.tgz -C /tmp
+
+      - name: Release notes
+        run: |
+          /tmp/git-cliff-2.14.2-x86_64-unknown-linux-gnu/git-cliff \
+            --tag "${GITHUB_REF_NAME}" --release-notes -o dist/release-notes.md
+          cat >> dist/release-notes.md <<'EOF'
+
+          ## Install
+
+          Unzip into `<game>/BepInEx/plugins/` and drop the cfg into `<game>/BepInEx/config/`.
+          The mod loads at game start; restart after installing.
+          EOF
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: dist/release-notes.md
+          files: dist/SettlementPlacementAdvisor-${{ github.ref_name }}.zip
