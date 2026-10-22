@@ -3,3 +3,6 @@ obj/
 
 # Decompiled HUMANKIND assemblies: proprietary, local-only cache, never commit.
 reference/
+
+# JetBrains IDE state: per-machine, never shared.
+.idea/
