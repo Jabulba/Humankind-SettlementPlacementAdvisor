@@ -61,10 +61,12 @@ Authentication: `GITHUB_TOKEN` env var (interpolated in `nuget.config`).
 
 - CI: per-run `GITHUB_TOKEN` (`packages: read`); nothing to set up.
 - Local: export a PAT with `read:packages` as `GITHUB_TOKEN` in your shell profile
-  (`export GITHUB_TOKEN=$(gh auth token)`); `nuget.config` also carries the local
-  folder feed `../Humankind-GameLibs/pkg`, so local builds stay green while the
-  GitHub Packages index propagates (a first CI restore right after a publish can
-  fail with NU1102 for a few minutes; repushing a `-rN` bump does not fix that).
+  (`export GITHUB_TOKEN=$(gh auth token)`). Add the machine-only folder feed
+  `<path-to>/Humankind-GameLibs/pkg` to `~/.nuget/NuGet/NuGet.Config` (not the repo's
+  `nuget.config`: NuGet hard-errors on a missing source in CI, and the repo config has
+  no `<clear/>`, so machine sources merge in). Folder feed = instant local restore;
+  the GitHub Packages index needs minutes to propagate after a publish, so CI restore
+  can fail with NU1102 right after one; rerun the workflow, do not republish.
 - Game update: repack with `scripts/publish-gamelibs.sh <game-build-number>` using a
   PAT with `write:packages`, then bump the exact pins in all three csproj files.
 
