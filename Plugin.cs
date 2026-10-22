@@ -13,11 +13,9 @@ namespace SettlementPlacementAdvisor
     /// writes the advisor's tail slots of the placement evaluation array.
     /// Rules: README.md; module vocabulary: GLOSSARY.md.
     /// </summary>
-    [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
+    [BepInPlugin(AdvisorConfig.PluginGuid, AdvisorConfig.PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "com.jabulba.settlementplacementadvisor";
-        public const string PluginName = "SettlementPlacementAdvisor";
         public const string PluginVersion = "0.1.0";
 
         internal static ConfigEntry<int> CfgTopHovered;
@@ -39,12 +37,10 @@ namespace SettlementPlacementAdvisor
         {
             Instance = this;
 
-            CfgTopHovered = Config.Bind("Advisor", "TopHovered", 2,
-                "Recommended tiles shown on the hovered territory; count is mandatory, below-minimum-FIMS tiles are included. The tile under the mouse ghost counts visually on top of this.");
-            CfgTopNeighbour = Config.Bind("Advisor", "TopNeighbour", 1,
-                "Recommended tiles shown on every other territory in range; count is mandatory.");
-            CfgRangeLevels = Config.Bind("Advisor", "RangeLevels", 2,
-                "Adjacency range from the hovered territory, center counts as 1: 3 = hovered + adjacent + adjacent-to-adjacent. Land adjacency only: sea, cliff and mountain edges never count as a range step.");
+            var cfg = AdvisorConfig.Bind(Config);
+            CfgTopHovered = cfg.TopHovered;
+            CfgTopNeighbour = cfg.TopNeighbour;
+            CfgRangeLevels = cfg.RangeLevels;
 
             GameApi.Resolve();
             if (!GameApi.ReadyStatic)
@@ -57,7 +53,7 @@ namespace SettlementPlacementAdvisor
             Writer = new EvaluationWriter();
             Advisor = new Advisor(GameApi.Shared, new PickComputation(GameApi.Shared), Writer, Stars);
 
-            var harmony = new Harmony(PluginGuid);
+            var harmony = new Harmony(AdvisorConfig.PluginGuid);
             harmony.PatchAll(typeof(Plugin).Assembly);
             Log("Ready: advisor patches active; star rendering wires on the first camp placement refresh.");
         }

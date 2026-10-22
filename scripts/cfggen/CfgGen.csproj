@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- RELEASE CONFIG GENERATOR (Q8: wrapper on Config): runs the production
+       AdvisorConfig.Bind against a fresh BepInEx Config and writes the
+       pre-generated cfg shipped in releases, byte-shaped like the game-written
+       file. Same pattern as the rangecircuit harness: production sources,
+       no copies. Not part of the mod build (the mod csproj excludes scripts/**). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>CfgGen</AssemblyName>
+    <RootNamespace>CfgGen</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0436;CS1701;CS1702;MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == ''">/var/home/jabulba/.local/share/Steam/steamapps/common/Humankind</GameDir>
+    <BepInExCoreDir>$(GameDir)/BepInEx/core</BepInExCoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\AdvisorConfig.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)/BepInEx.dll</HintPath><Private>true</Private></Reference>
+  </ItemGroup>
+
+</Project>
