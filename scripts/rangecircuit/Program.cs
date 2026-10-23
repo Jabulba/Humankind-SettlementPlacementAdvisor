@@ -576,26 +576,47 @@ internal static class Program
         Check("the return move asks no tile gate", chain.TileGateCalls == 0);
     }
 
-    /// <summary>Q28: unknown adjacency degrades the pass to the hovered territory alone and logs
-    /// the surface failure. Unknown is the no-answer outcome, never a territory with no edges.</summary>
+    /// <summary>Q28: SPEC section 2 step 3 - unknown adjacency degrades the pass to the hovered
+    /// territory's admission set ALONE. Every territory the scan reached at level 2 or deeper
+    /// drops out of the published set, including the admission sets it added mid-pass, and the
+    /// surface failure is logged. Unknown is the no-answer outcome, never a territory with no
+    /// edges.</summary>
     private static void UnknownAdjacency()
     {
-        var chain = Chain();
-        chain.UnknownAdjacency[0] = true;
-        var picks = null as Pick[];
-        var logged = Capture(() => { picks = ScanOn(new PickComputation(chain), chain, 0, 2, 1, 3); });
-        Expect("unknown hovered adjacency degrades the pass to the hovered territory", picks, 100, 102);
+        // The hovered territory's own edges unanswered at the first expansion, quota 2,
+        // RangeLevels 2: the pass publishes the hovered quota-2 set, never the hovered set
+        // together with the level-2 set.
+        var hovered = WideChain();
+        hovered.UnknownAdjacency[0] = true;
+        var hoveredPicks = null as Pick[];
+        var hoveredLog = Capture(() => { hoveredPicks = ScanOn(new PickComputation(hovered), hovered, 0, 2, 2, 2); });
+        Expect("unknown hovered adjacency publishes the hovered quota-2 set alone", hoveredPicks, 100, 102);
+        Check("the hovered-territory degradation publishes no level-2 tile", CountTerritory(hoveredPicks, 1) == 0);
         Check("the hovered-territory adjacency failure is logged on the surface",
-            logged.Contains("adjacency") && logged.Contains("territory 0"));
+            hoveredLog.Contains("adjacency") && hoveredLog.Contains("territory 0"));
 
-        // SPEC section 2 step 3: an unknown edge set anywhere in the pass degrades the WHOLE pass
-        // to the hovered territory's admission set - the territory the scan reached before the
-        // failure publishes nothing.
-        var blocked = Chain();
+        // The partial case a keep-the-reached-territories scan allowed: the level-2 frontier
+        // answers unknown AFTER its own admission set was added mid-pass. The published set is the
+        // hovered territory's picks only - 110 and 111 drop out with the reached territory.
+        var frontier = WideChain();
+        frontier.UnknownAdjacency[1] = true;
+        var frontierPicks = null as Pick[];
+        var frontierLog = Capture(() => { frontierPicks = ScanOn(new PickComputation(frontier), frontier, 0, 2, 2, 4); });
+        Expect("a level-2 frontier with unknown edges drops its own added set", frontierPicks, 100, 102);
+        Check("the level-2 frontier degradation publishes no tile of any reached territory",
+            CountTerritory(frontierPicks, 1) == 0 && CountTerritory(frontierPicks, 2) == 0);
+        Check("the level-2 frontier adjacency failure is logged on the surface",
+            frontierLog.Contains("adjacency") && frontierLog.Contains("territory 1"));
+
+        // Deeper still: level 2 and level 3 add their admission sets, then the level-3 frontier
+        // answers unknown - every reached territory drops out of the published set.
+        var blocked = WideChain();
         blocked.UnknownAdjacency[2] = true;
         var reached = null as Pick[];
-        var blockedLog = Capture(() => { reached = ScanOn(new PickComputation(blocked), blocked, 0, 2, 1, 5); });
-        Expect("an unknown edge set at level 2 degrades the pass to the hovered territory", reached, 100, 102);
+        var blockedLog = Capture(() => { reached = ScanOn(new PickComputation(blocked), blocked, 0, 2, 2, 5); });
+        Expect("an unknown edge set deeper in the neighborhood drops every reached territory", reached, 100, 102);
+        Check("the deep degradation publishes no tile of any reached territory",
+            CountTerritory(reached, 1) == 0 && CountTerritory(reached, 2) == 0);
         Check("the mid-neighborhood adjacency failure is logged on the surface",
             blockedLog.Contains("adjacency") && blockedLog.Contains("territory 2"));
 
@@ -703,6 +724,24 @@ internal static class Program
         Link(chain, 2, 3, TerritoryTransition.Coast);
         Link(chain, 3, 4, TerritoryTransition.Closed);
         return chain;
+    }
+
+    /// <summary>The adjacency-failure graph: a five-territory land chain with 4 settlement-site
+    /// tiles per territory, so a level-2 tile is unmistakable in a published set. Territory 0 is
+    /// tiles 100,101,102,103 (quota 2 admits 100 and 102), territory 1 is 110..113 (quota 2 admits
+    /// 110 and 111), territory 2 is 120..123 (quota 2 admits 120 and 122).</summary>
+    private static GraphSurface WideChain()
+    {
+        var wide = Camp(tiles: 4, scores: new[] { 30, 10, 25, 5 }); // territory 0: 100, 102
+        Score(wide, 1, new[] { 40, 35, 10, 5 }); // territory 1: 110, 111
+        Score(wide, 2, new[] { 90, 10, 20, 5 }); // territory 2: 120, 122
+        Score(wide, 3, new[] { 70, 10, 20, 5 }); // territory 3
+        Score(wide, 4, new[] { 60, 20, 10, 5 }); // territory 4
+        Link(wide, 0, 1, TerritoryTransition.Open);
+        Link(wide, 1, 2, TerritoryTransition.Open);
+        Link(wide, 2, 3, TerritoryTransition.Open);
+        Link(wide, 3, 4, TerritoryTransition.Open);
+        return wide;
     }
 
     private static void Score(GraphSurface surface, int territory, int[] scores)
