@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Linq.Expressions;
 using System.Collections.Generic;
 using System.Globalization;
 using Amplitude; // FixedPoint (assembly Amplitude.Framework.dll).
@@ -166,7 +168,9 @@ internal sealed class ScanSurface : GameSurface
 /// scan acceptance row (SPEC section 9) is the level-3 neighborhood over ~4300 tiles / ~1000 gate
 /// calls, completing within 5 ms per refresh on net10 with an explicit 4x Unity Mono inflation
 /// allowance. Reported rows: cold pass, cache-hit refresh, claim-triggered recompute. No runtime
-/// cap, budget, or affordability prefilter is introduced to meet the bound.
+/// cap, budget, or affordability prefilter is introduced to meet the bound. Measurement is
+/// steady state: a fixed block of discarded warmup iterations per scenario, the median of 15
+/// measured iterations; the scenarios, the bound and the allowance are fixed.
 ///
 /// Graph: a 20x10 territory grid (200 = realistic big map; ceiling 256 = 8-bit territory index).
 /// Base edges = Moore 8 (all-edge adjacency, no transition filter). Overlay edges random to the
@@ -223,6 +227,49 @@ internal static class Program
 
     static int s_heavySink;
 
+    // The compiled-delegate row mirrors the production adapter's mechanism (GameApi compiles its
+    // hot members into strongly-typed delegates at Resolve): the same gate signature bound once
+    // with Linq.Expressions, so a call carries its ref arguments on the stack - no per-call
+    // object[], no boxed structs. Army is internal and non-constructable headless: object stands in.
+    private struct ScanGateCosts
+    {
+        public FixedPoint Money;
+        public FixedPoint Influence;
+        public FixedPoint Unit;
+    }
+
+    private delegate ArmyActionFailureFlags ScanCampTileGate(object army, int tileIndex, ref ScanGateCosts costs);
+
+    /// <summary>
+    /// Compile a strongly-typed lambda over a gate method (the production mechanism): delegate
+    /// parameters by type, then the extra call arguments - a local bound by ref (the flags) and
+    /// fields of a ref struct parameter (the settle-cost trio) - mirroring GameApi.GateCampTile.
+    /// </summary>
+    private static Delegate CompileGate(System.Reflection.MethodInfo method, Type delegateType,
+        Type[] delegateParameterTypes, int boundLocalIndex, int costsParameterIndex)
+    {
+        var parameters = new System.Linq.Expressions.ParameterExpression[delegateParameterTypes.Length];
+        var arguments = new System.Linq.Expressions.Expression[method.GetParameters().Length];
+        for (int i = 0; i < delegateParameterTypes.Length; i++)
+        {
+            parameters[i] = System.Linq.Expressions.Expression.Parameter(delegateParameterTypes[i], "a" + i);
+            arguments[i] = parameters[i];
+        }
+        var flags = System.Linq.Expressions.Expression.Parameter(method.GetParameters()[boundLocalIndex].ParameterType.GetElementType(), "failureFlags"); // block local; Call binds it by ref
+        var costs = parameters[costsParameterIndex]; // the ref ScanGateCosts delegate parameter
+        arguments[boundLocalIndex] = flags;
+        arguments[boundLocalIndex + 1] = System.Linq.Expressions.Expression.Field(costs, "Money");
+        arguments[boundLocalIndex + 2] = System.Linq.Expressions.Expression.Field(costs, "Influence");
+        arguments[boundLocalIndex + 3] = System.Linq.Expressions.Expression.Field(costs, "Unit");
+        var call = method.IsStatic
+            ? System.Linq.Expressions.Expression.Call(method, arguments)
+            : System.Linq.Expressions.Expression.Call(
+                System.Linq.Expressions.Expression.Convert(parameters[0], method.DeclaringType), method,
+                System.Linq.Enumerable.Skip(arguments, 1).ToArray()); // headless gate bodies are static
+        var body = System.Linq.Expressions.Expression.Block(new[] { flags }, call, flags);
+        return System.Linq.Expressions.Expression.Lambda(delegateType, body, parameters).Compile();
+    }
+
     static readonly System.Reflection.MethodInfo s_gateHeavyMethod =
         typeof(Program).GetMethod("GateHeavy", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
     static readonly System.Reflection.MethodInfo s_gateLightMethod =
@@ -237,7 +284,9 @@ internal static class Program
         Console.WriteLine();
 
         // Per-call gate cost (ns/call, warm): the production tile gate is a reflection invoke on the
-        // settle-cost signature, so reflection overhead over the direct call is part of the floor.
+        // settle-cost signature, the production tile gate's shape; the gate is measured three
+        // ways: reflection invoke per call, the direct call, and the compiled delegate the
+        // production hot path now runs on.
         var army = new object();
         var sw = SDStopwatch.StartNew();
         double lightNs = Benchmark(20000, 4000, delegate
@@ -258,6 +307,21 @@ internal static class Program
         Console.WriteLine(string.Format(ci,
             "gate call (ns/call, warm): reflection light={0:F0}  reflection settle-cost body={1:F0}  direct settle-cost body={2:F0}  reflection overhead={3:F0}",
             lightNs, heavyNs, directNs, heavyNs - directNs));
+
+        // The compiled-delegate row: the same gate body and signature bound once as a strongly-
+        // typed delegate (the production hot path now runs on startup-compiled delegates, never
+        // MethodInfo.Invoke), so the per-call reflection overhead over the direct call is gone.
+        var compiledGate = (ScanCampTileGate)CompileGate(s_gateHeavyMethod, typeof(ScanCampTileGate),
+            new[] { typeof(object), typeof(int), typeof(ScanGateCosts).MakeByRefType() }, 2, 2);
+        double compiledNs = Benchmark(20000, 4000, delegate
+        {
+            var costs = new ScanGateCosts();
+            compiledGate(army, 4242, ref costs);
+        });
+
+        Console.WriteLine(string.Format(ci,
+            "gate call (ns/call, warm): compiled settle-cost delegate={0:F0}  reflection overhead the compiled path replaces={1:F0}  compiled/reflection={2:F2}",
+            compiledNs, heavyNs - directNs, compiledNs / (heavyNs - directNs)));
         Console.WriteLine();
 
         var scenarios = new[]
@@ -269,7 +333,7 @@ internal static class Program
             new Scenario { Name = "WIDE SCAN     T54 D11 R3 e40", TilesPer = 54, Degree = 11, Range = 3, ExploredPct = 40, Hovered = TileOf(5, 2), Wide = true },
         };
 
-        Console.WriteLine(string.Format(ci, "per-refresh scan cost (ms, median of 5; production PickComputation.Compute):"));
+        Console.WriteLine(string.Format(ci, "per-refresh scan cost (ms, median of 15 after warmup; production PickComputation.Compute):"));
         Console.WriteLine(string.Format(ci, "{0}  nb-terr  nb-tiles  gates   cold    hit     recompute", "scenario"));
 
         bool sawWide = false;
@@ -285,10 +349,13 @@ internal static class Program
             new PickComputation(surface).Compute(Context(s.Hovered, s.Range));
             int gates = surface.TileGateCalls;
 
-            // JIT-warm the surface so a measured pass costs a refresh, not first-run compilation.
-            new PickComputation(surface).Compute(Context(s.Hovered, s.Range));
+            // Steady state: discard a fixed block of iterations per scenario before measuring, so
+            // a measured row costs a refresh, not JIT warmup - on a shared CI runner the early
+            // iterations are compilation, not production cost. The scenarios stay untouched: same
+            // map, neighborhood, gate calls, bound and inflation allowance.
+            WarmupSteadyState(surface, s);
 
-            double cold = MedianOf(5, delegate
+            double cold = Median(15, delegate
             {
                 var computation = new PickComputation(surface); // empty cache: the whole neighborhood recomputes
                 return Timed(delegate { computation.Compute(Context(s.Hovered, s.Range)); });
@@ -296,7 +363,7 @@ internal static class Program
 
             // cache-hit refresh: hover moves to a neighbor; cached neighborhoods serve hits,
             // territories newly entering the neighborhood scan cold.
-            double hit = MedianOf(5, delegate
+            double hit = Median(15, delegate
             {
                 var computation = new PickComputation(surface);
                 computation.Compute(Context(s.Hovered, s.Range)); // fills the cache for the first neighborhood
@@ -305,7 +372,7 @@ internal static class Program
 
             // claim-triggered recompute: the claim frame bumps and every neighborhood territory's claim
             // stamp moves (an owner steal per territory), so the full pass recomputes; equals the cold pass.
-            double recompute = MedianOf(5, delegate
+            double recompute = Median(15, delegate
             {
                 var computation = new PickComputation(surface);
                 computation.Compute(Context(s.Hovered, s.Range));
@@ -516,7 +583,21 @@ internal static class Program
         return sw.Elapsed.TotalMilliseconds;
     }
 
-    private static double MedianOf(int reps, Func<double> measure)
+    private static void WarmupSteadyState(ScanSurface surface, Scenario s)
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            new PickComputation(surface).Compute(Context(s.Hovered, s.Range));
+            new PickComputation(surface).Compute(Context(s.Hovered + 1, s.Range));
+            var computation = new PickComputation(surface);
+            computation.Compute(Context(s.Hovered, s.Range));
+            surface.TerritoryFrame++;
+            computation.Compute(Context(s.Hovered, s.Range));
+        }
+        surface.TerritoryFrame++; // the warmup ends on the frame the measured rows run on
+    }
+
+    private static double Median(int reps, Func<double> measure)
     {
         var samples = new double[reps];
         for (int i = 0; i < reps; i++) samples[i] = measure();
