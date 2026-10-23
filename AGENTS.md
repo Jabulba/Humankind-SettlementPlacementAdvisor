@@ -25,7 +25,8 @@ vocabulary, `CONTRIBUTING.md` the commit/release standard. Read those before cha
 - `scripts/gen-cfg.sh` — release cfg generation only; `scripts/publish-gamelibs.sh <build>` —
   repack game assemblies after a game update.
 - Runtime log: grep `SettlementPlacementAdvisor` in `$GAME_DIR/BepInEx/LogOutput.log`.
-  `Plugin.Awake` exceptions appear only in the Proton prefix `Player.log`.
+  `Plugin.Awake` exceptions appear only in the Proton prefix `Player.log`; a load failure also
+  writes `BepInEx/SettlementPlacementAdvisor-load-failure.log` as its durable copy.
 
 Scripts assume the SDK at `~/.dotnet` and set `DOTNET_ROOT`/`PATH` themselves.
 
@@ -43,8 +44,8 @@ Scripts assume the SDK at `~/.dotnet` and set `DOTNET_ROOT`/`PATH` themselves.
 
 Simulation thread: `Patches.cs` → `Advisor` → `PickComputation` → `EvaluationWriter` →
 `PickSet`. Presentation thread: `StarRenderer` and the FIMS-pin postfix read the captured
-`PickSet`. `Plugin.cs` is only composition; `GameSurface` is the rules' seam and `GameApi` its
-reflection adapter.
+`PickSet`. `Plugin.cs` is composition plus the load gate (`LoadGate`); `GameSurface` is the rules'
+seam and `GameApi` its reflection adapter.
 
 - **Writes happen only through the active mode's advisor pipeline, into that mode's evaluation.**
   The mode-policy table wires `CreateCamp` and `FoundCity`; the three modes share
@@ -58,9 +59,11 @@ reflection adapter.
 - `PickSet.Current` is the only cross-thread channel: immutable, volatile, version-gated, with
   entering/leaving diffs. Do not add other shared mutable state or touch Unity objects on the
   simulation thread.
-- `GameApi.Resolve()` checks reflected member names at startup. If the log says
-  `Disabled, unresolved game members`, the game build drifted: decompile and update those names
-  rather than guessing. Territory facts fail closed; see GLOSSARY for the refresh/pick contracts.
+- `GameApi.Resolve()` checks reflected member names at startup and `LoadGate` makes an unresolved
+  name a hard, loud load failure: the failure list is logged and the game closes. If the log says
+  `Load failure, unresolved game members`, the game build drifted: decompile and update those
+  names rather than guessing. Territory facts fail closed; see GLOSSARY for the refresh/pick
+  contracts.
 - Source files at the repo root are globbed by the plugin automatically, but each harness uses
   explicit `<Compile Include>` lists (and substitutes `PluginShim.cs` for `Plugin.cs`). Add new
   production files to the relevant harness csproj or they silently will not be tested.
