@@ -14,7 +14,8 @@ left completely alone.
 ## Features
 
 - **Recommended-tile stars** for every territory in the placement neighborhood.
-- **FIMS pins** so you can compare Food, Industry, Money and Science at a glance.
+- **Stars and pins are one set**: every recommended tile gets a star, and its FIMS pin shows
+  when the game's own pin rules allow it.
 - **Every adjacency edge is a hop**: sea, cliff, mountain and closed-border edges extend the
   recommendation range exactly like a land edge.
 - **Uses the game's own evaluation**, including its settlement score weighting.
@@ -118,9 +119,13 @@ and vanilla's full camp evaluation is never called from that snapshot. It then:
    territory, using a per-territory cache keyed by the frames the rules read, the world claim
    frame included, so a claim, unclaim, owner steal, exploration or patrol change recomputes the
    territory it changed.
-6. Writes the admitted tiles into a fixed tail of the placement evaluation, then publishes an
-   immutable pick set for the presentation side.
-7. Renders stars and controls the FIMS pin gate from that pick set.
+6. Writes the admitted tiles into a fixed tail of the placement evaluation, each entry shown,
+   then publishes an immutable pick set for the presentation side.
+7. Renders a star on every published tile and answers the FIMS pin gate from the same set: a
+   member shows its pin when the game's own hovered-tile rule allows it, and nothing else shows
+   a pin. The game's generic pin filters (unexplored tiles, zero-yield tiles, off-screen
+   culling) keep deciding which pins you see, so a member with no FIMS yield, or one outside
+   the window, gets its star and no pin.
 
 All writes are restricted to `CreateCamp`. `FoundCity` and `FoundCityWithSettler` share the same
 evaluation type, which is why city sessions are a strict no-op: no stars, no pins, no glyph
@@ -148,7 +153,7 @@ Search for `SettlementPlacementAdvisor`.
 |---|---|
 | No stars at all | Is the plugin loaded? Are you in settlement placement, not city founding? |
 | A territory has no stars | Tiles must be explored, unowned and non-water; claimed territories are skipped |
-| No recommendations anywhere on this hover | Vanilla recommendations take over when every territory in range has nothing to advise |
+| No recommendations anywhere on this hover | Nothing displays when the neighborhood has nothing to advise: no stars, no pins, and no vanilla recommendations taking their place |
 | `Disabled, unresolved game members` | The game build changed; report the log and game version in an issue |
 | Nothing appears until the cursor moves | The mod wires star rendering on the first settlement placement refresh |
 

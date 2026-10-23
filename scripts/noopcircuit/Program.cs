@@ -718,7 +718,7 @@ internal static class Program
         // sealed filter chain vanilla owns, which the mod never patches.
         Check("every published member entry carries the zero-yield fact the vanilla yield filter rejects",
             AllMemberEntriesZeroYield(scanEval, admitted));
-        Check("vanilla's unpatched filter chain rejects a scrubbed slot the gate admits",
+        Check("vanilla's unpatched filter chain runs, and rejects the writer's scrubbed slot",
             !VanillaPinFilter(ScrubbedEntry()));
         Check("the gate carries no yield rule of its own: every zero-yield member is admitted",
             GateAnswer(admitted[0]) && GateAnswer(admitted[1]) && GateAnswer(admitted[2]));
