@@ -95,9 +95,14 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Simulation thread, per cursor refresh: vanilla keeps running the refresh, and the advisor
-    /// publishes the admission set its pipeline computed for the cursor territory, writing it into
-    /// the evaluation tail. Failures publish INACTIVE and never write the evaluation.
+    /// Simulation thread, per cursor refresh: the advisor's takeover of the hover refresh. In a mode
+    /// it has taken over the advisor writes the cursor slot (the TailStart entry) itself from the
+    /// mode gate call with no mask, publishes the admission set its pipeline computed, and vanilla's
+    /// whole refresh body is skipped - its append-one-tile hover rule and resize-by-10 die with it,
+    /// so the cursor slot is written once, by the advisor. A mode the mode-policy table has not
+    /// wired, and a surface that cannot answer, leave vanilla running its own refresh: its own
+    /// cursor entry survives, and the advisor writes nothing. Failures publish INACTIVE and never
+    /// write the evaluation.
     /// </summary>
     [HarmonyPatch]
     internal static class SettlementEvaluationPatch
@@ -107,17 +112,28 @@ namespace SettlementPlacementAdvisor
             return AccessTools.Method("Amplitude.Mercury.Interop.CampPlacementEvaluation:UpdateCurrentPosition");
         }
 
-        private static void Postfix(CampPlacementEvaluation __instance, int currentPositionTileIndex, SimulationEntityGUID armyGUID)
+        private static bool Prefix(CampPlacementEvaluation __instance, int currentPositionTileIndex, SimulationEntityGUID armyGUID)
         {
+            var plugin = Plugin.Instance;
+            if (plugin == null) return true; // advisor not composed: vanilla refreshes untouched
+
+            if (!plugin.Advisor.OwnsRefresh(__instance))
+            {
+                plugin.Advisor.Deactivate(); // INACTIVE: vanilla's refresh keeps its own cursor entry
+                return true;
+            }
+
             try
             {
-                Plugin.Instance.Advisor.Run(__instance, currentPositionTileIndex, armyGUID);
+                plugin.Advisor.Run(__instance, currentPositionTileIndex, armyGUID);
             }
             catch (Exception e)
             {
-                Plugin.Instance.Advisor.Deactivate(); // failure path never writes the evaluation
-                GameApi.Fail("UpdateCurrentPosition postfix: " + e.Message);
+                plugin.Advisor.Deactivate(); // failure path never writes the evaluation
+                GameApi.Fail("UpdateCurrentPosition takeover: " + e.Message);
+                return true; // vanilla's own cursor entry stays: a failure takes no highlight away
             }
+            return false;
         }
     }
 

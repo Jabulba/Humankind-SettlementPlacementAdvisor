@@ -1,3 +1,4 @@
+using Amplitude; // FixedPoint: the cursor slot's instant cost trio
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType
 using Amplitude.Mercury.Simulation;
@@ -7,9 +8,11 @@ namespace SettlementPlacementAdvisor
     /// <summary>
     /// Simulation-thread orchestration from the vanilla placement snapshot to a published pick
     /// set. It owns no rule logic and writes no evaluation content: the pipeline lives in
-    /// PickComputation, the writes in EvaluationWriter. Both entry points run the same mode-policy
-    /// dispatch on the stamped SettleType, and an unwired mode is left entirely to vanilla: the
-    /// advisor's own pipeline (SPEC section 2 steps 3-8) never runs for it.
+    /// PickComputation, the writes in EvaluationWriter. It reads the facts the cursor slot needs -
+    /// the mode gate call with no mask, so the hovered tile's failure flags and instant costs reach
+    /// the writer faithfully - and hands them over; the writer owns the slot. Both entry points run
+    /// the same mode-policy dispatch on the stamped SettleType, and an unwired mode is left entirely
+    /// to vanilla: the advisor's own pipeline (SPEC section 2 steps 3-8) never runs for it.
     /// </summary>
     internal sealed class Advisor
     {
@@ -45,7 +48,8 @@ namespace SettlementPlacementAdvisor
         /// </summary>
         public void RunScanPass(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
-            var picks = Compute(out var outcome, evaluation, cursorTile, armyGuid);
+            object army;
+            var picks = Compute(out var outcome, out army, evaluation, cursorTile, armyGuid);
             if (outcome != Outcome.Picks)
             {
                 // The scan pass writes nothing, so there is no tail to clear: an activation that
@@ -57,38 +61,93 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Per-refresh entry (the UpdateCurrentPosition postfix, after vanilla's own refresh): the
-        /// admission set the pipeline computed for the cursor territory, written into the tail and
-        /// published. A zero-pick result publishes INACTIVE, which displays nothing: stars cleared,
-        /// no pin, and no vanilla surface taking the advice's place - and it takes the advisor's
-        /// tail contribution with it.
+        /// Per-refresh entry (the UpdateCurrentPosition takeover): the cursor slot plus the admission
+        /// set. The advisor writes the cursor slot itself from the mode gate call with no mask, so
+        /// the failure flags and the three instant costs reach the camp mouse marker and the
+        /// hovered-pin rule, and the cursor index points at that slot. A zero-pick result publishes
+        /// INACTIVE, which displays nothing: stars cleared, no cursor entry, no pick entries, no pin,
+        /// and no vanilla surface taking the advice's place - and it takes the advisor's tail
+        /// contribution with it.
         /// </summary>
         public void Run(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
-            var picks = Compute(out var outcome, evaluation, cursorTile, armyGuid);
+            object army;
+            var picks = Compute(out var outcome, out army, evaluation, cursorTile, armyGuid);
             switch (outcome)
             {
                 case Outcome.Picks:
-                    m_Writer.Write(evaluation, picks, cursorTile);
+                    m_Writer.Write(evaluation, picks, CursorSlotFacts(evaluation, army, cursorTile));
                     Publish(picks);
                     break;
                 case Outcome.NoPicks:
-                    PublishEmpty(evaluation); // no glyphs, no pick entries, no pins
+                    PublishEmpty(evaluation); // no cursor entry, no glyphs, no pick entries, no pins
                     break;
                 default:
-                    Deactivate(); // vanilla's mode: its entries and glyphs stay exactly as they are
+                    Deactivate(); // vanilla's mode: its entries, its cursor entry, its glyphs stay
                     break;
             }
         }
 
         /// <summary>
+        /// The refresh decision the takeover patch asks. In a wired mode with an answering surface
+        /// the advisor owns the cursor slot, so vanilla's whole refresh body - the append-one-tile
+        /// hover rule with its resize-by-10 included - is skipped. Anywhere else vanilla keeps
+        /// running its own refresh, its own cursor entry included, and nothing is double-written.
+        /// </summary>
+        public bool OwnsRefresh(CampPlacementEvaluation evaluation)
+        {
+            return m_Game.Ready && ModePolicy.IsWired(evaluation.SettleType);
+        }
+
+        /// <summary>
+        /// The cursor slot's content for one refresh (SPEC section 5 row 5): the mode gate call with
+        /// NO mask, so the money and influence failures stay and the cost trio is what the camp mouse
+        /// marker shows, plus the hovered tile's own scored entry the ghost and the tile feedback
+        /// read. An unanswerable gate is the no-entry shape: nothing is claimed about the hovered
+        /// tile, and the cursor slot stays scrubbed.
+        /// </summary>
+        private CursorSlot CursorSlotFacts(CampPlacementEvaluation evaluation, object army, int cursorTile)
+        {
+            var unanswered = CursorSlot.Unanswered;
+            if (army == null) return unanswered;
+
+            var mode = evaluation.SettleType;
+            ArmyActionFailureFlags failure;
+            FixedPoint money, influence, unit;
+            if (!m_Game.TryGetTileGateFailures(mode, army, cursorTile, false,
+                out failure, out money, out influence, out unit))
+                return unanswered;
+
+            object definition;
+            DistrictPlacementEvaluation.ValidTile entry;
+            FixedPoint score;
+            if (!m_Game.TryGetDistrictDefinition(mode, out definition) ||
+                !m_Game.EvaluateTile(army, cursorTile, definition, out entry, out score))
+                return unanswered;
+
+            entry.Showable = false; // no glyph on the cursor slot: the pick slots own the shown set
+            var slot = new CursorSlot();
+            slot.Answered = true;
+            slot.Tile = cursorTile;
+            slot.Entry = entry;
+            slot.Failure = failure;
+            slot.MoneyCost = money;
+            slot.InfluenceCost = influence;
+            slot.UnitCost = unit;
+            return slot;
+        }
+
+        /// <summary>
         /// The pipeline entry both entry points share, in order: mode-policy dispatch on the stamped
         /// SettleType, the cursor context, the army-level gate, then the rules. Null means no
-        /// admission set; the outcome says whether the advisor owned this run.
+        /// admission set; the outcome says whether the advisor owned this run. The placing army
+        /// comes out with the picks: the cursor slot's gate call needs it.
         /// </summary>
-        private Pick[] Compute(out Outcome outcome, CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
+        private Pick[] Compute(out Outcome outcome, out object army, CampPlacementEvaluation evaluation,
+            int cursorTile, SimulationEntityGUID armyGuid)
         {
             outcome = Outcome.NotAdvisable;
+            army = null;
             var picks = null as Pick[];
             if (!m_Game.Ready) return picks; // unanswerable game fact: nothing to advise in any mode
 
@@ -97,7 +156,7 @@ namespace SettlementPlacementAdvisor
             var mode = evaluation.SettleType;
             if (!ModePolicy.IsWired(mode)) return picks;
 
-            var army = m_Game.TryGetArmy(armyGuid);
+            army = m_Game.TryGetArmy(armyGuid);
             if (army == null)
             {
                 outcome = Outcome.NoPicks; // our mode, and the army the advice hangs on is unanswerable

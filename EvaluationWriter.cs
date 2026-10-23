@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
+using Amplitude; // FixedPoint (assembly Amplitude.Framework.dll).
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
 using Amplitude.Mercury.Simulation; // CustomTileIndexArea
@@ -8,17 +10,44 @@ using Amplitude.Mercury.Simulation; // CustomTileIndexArea
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
+    /// What the advisor read about the hovered tile for one refresh, as the writer writes it into
+    /// the cursor slot: the tile, its own scored entry, and the mode gate call's answer with no
+    /// mask - the failure flags plus the three instant costs the camp mouse marker shows. The
+    /// no-entry shape (Answered false) is the advisor's claim that nothing is known about the
+    /// hovered tile: the cursor slot is scrubbed and the cursor index points at nothing.
+    /// </summary>
+    internal struct CursorSlot
+    {
+        public bool Answered;
+        public int Tile;
+        public DistrictPlacementEvaluation.ValidTile Entry;
+        public ArmyActionFailureFlags Failure;
+        public FixedPoint MoneyCost;
+        public FixedPoint InfluenceCost;
+        public FixedPoint UnitCost;
+
+        /// <summary>The no-entry shape: scrubbed slot, cleared failure flags and costs.</summary>
+        public static readonly CursorSlot Unanswered = new CursorSlot();
+    }
+
+    /// <summary>
     /// Puts picks into the settlement placement evaluation for the FIMS pins: the advisor-written
     /// slots carry the shown set, so a published member is the entry's Showable flag and vanilla's
     /// own entries keep their own glyphs. Settlement placement writes only: FoundCity and
-    /// FoundCityWithSettler share this evaluation type, so the mutating entry point guards on
-    /// SettleType and a city activation only scrubs a tail left by an earlier settlement session.
+    /// FoundCityWithSettler share this evaluation type, so the mutating entry point guards on the
+    /// mode-policy row and a city activation only scrubs a tail left by an earlier settlement
+    /// session.
     ///
-    /// The tail is one fixed window reserved at activation. TailStart is the cursor slot,
-    /// vanilla's append point after a full-eval Initialize; slots above it hold the picks,
-    /// rewritten at invariant indices. Vanilla entries never move, so index-bound pins never
-    /// rebind a retained pick. ValidTileCount rises only after the entries are written and a
-    /// memory barrier passed, so the presentation thread never sees a hole. Simulation thread.
+    /// Each evaluation gets one fixed tail window, reserved at its activation: TailStart is the
+    /// cursor slot, and the advisor writes it itself on every refresh of a mode it has taken over,
+    /// which is why vanilla's append-one-tile hover rule is dead in that mode. The slots above it
+    /// hold the picks, rewritten at invariant indices. Vanilla entries never move, so index-bound
+    /// pins never rebind a retained pick. A window is tracked per evaluation instance because the
+    /// range overlay's evaluation is a second live instance of the same type (SPEC section 7), and
+    /// every slot above the live count is zeroed (the Initialize(-1) shape vanilla skips), the
+    /// writer's own duty from the reservation on. ValidTileCount rises only after the entries are
+    /// written and a memory barrier passed, so the presentation thread never sees a hole.
+    /// Simulation thread.
     /// </summary>
     internal sealed class EvaluationWriter
     {
@@ -34,16 +63,37 @@ namespace SettlementPlacementAdvisor
         private static readonly MethodInfo InitializeMethod = typeof(CampPlacementEvaluation).GetMethod(
             "Initialize", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(CustomTileIndexArea) }, null);
 
-        private int m_TailStart = -1; // cursor slot index (fixed for the session); -1 = no baseline
+        /// <summary>The cursor slot index of one evaluation's reserved window.</summary>
+        private sealed class TailWindow
+        {
+            public int TailStart = -1; // fixed for this evaluation's session; -1 = not reserved
+        }
+
+        // Reference-keyed: each evaluation instance (the cursor snapshot's, the range overlay's)
+        // owns its own window. Simulation thread only, like every other writer field.
+        private readonly Dictionary<CampPlacementEvaluation, TailWindow> m_Windows =
+            new Dictionary<CampPlacementEvaluation, TailWindow>();
+
+        /// <summary>
+        /// The cursor slot's invariant index in one evaluation: the base of its reserved window,
+        /// fixed for the session. -1 while no tail is reserved.
+        /// </summary>
+        public int CursorSlotIndex(CampPlacementEvaluation evaluation)
+        {
+            TailWindow window;
+            return m_Windows.TryGetValue(evaluation, out window) ? window.TailStart : -1;
+        }
 
         /// <summary>
         /// Activation baseline (postfix on Initialize, simulation thread): vanilla's valid
         /// positions are final, so record the cursor slot and reserve the tail before refreshes
-        /// start. SettleType is assigned before Initialize runs, so it is authoritative here.
+        /// start. SettleType is assigned before Initialize runs, so it is authoritative here. The
+        /// reserved window is zero-filled on the way in: the slots above the count the advisor owns
+        /// start as the shape vanilla skips.
         /// </summary>
         public void NoteActivation(CampPlacementEvaluation evaluation)
         {
-            if (evaluation.SettleType != ArmyActionType.CreateCamp)
+            if (!ModePolicy.IsWired(evaluation.SettleType))
             {
                 // Vanilla scores ValidTiles[0..Length), not [0..ValidTileCount), and skips only
                 // entries under 25 FIMS, so surviving settlement picks would compete with real city
@@ -52,10 +102,12 @@ namespace SettlementPlacementAdvisor
                 return;
             }
 
-            m_TailStart = evaluation.ValidTileCount;
+            var window = WindowFor(evaluation);
+            window.TailStart = evaluation.ValidTileCount;
 
-            int capacity = m_TailStart + 1 + TailCapacity;
+            int capacity = window.TailStart + 1 + TailCapacity;
             var tiles = evaluation.ValidTiles;
+            int grown = tiles == null ? 0 : tiles.Length;
             if (tiles == null || tiles.Length < capacity)
             {
                 Array.Resize(ref tiles, capacity);
@@ -67,20 +119,19 @@ namespace SettlementPlacementAdvisor
                 Array.Resize(ref flags, capacity);
                 evaluation.ConditionalFlagsTileIndexes = flags;
             }
+            ZeroFill(evaluation, Math.Max(window.TailStart, grown), capacity);
 
             var plugin = Plugin.Instance;
             if (plugin != null)
-                plugin.Log("activation baseline count=" + m_TailStart + " capacity=" + evaluation.ValidTiles.Length);
+                plugin.Log("activation baseline count=" + window.TailStart + " capacity=" + evaluation.ValidTiles.Length);
         }
 
         /// <summary>
         /// The activation baseline in a taken-over mode. Vanilla's full settlement evaluation was
         /// the only Initialize caller in camp mode (SimulationEvaluator.cs:2332); with the
         /// takeover replacing it, the advisor runs Initialize itself over an empty candidate area.
-        /// The Initialize postfix then reserves the tail from this baseline, vanilla's hover append
-        /// finds a real array to append its cursor entry into (CampPlacementEvaluation.cs:75-81
-        /// dereferences ValidTiles.Length), and the best-camp arrays come back all -1, which is
-        /// how the retired best-of-2 cascade leaves them.
+        /// The Initialize postfix then reserves the tail from this baseline, and the best-camp
+        /// arrays come back all -1, which is how the retired best-of-2 cascade leaves them.
         /// </summary>
         public void ReserveBaseline(CampPlacementEvaluation evaluation)
         {
@@ -98,124 +149,159 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Rewrite the pick slots in place (ascending unique tiles, simulation thread): each
-        /// member's entry is written Showable, so the glyph set is the published membership, and
-        /// the slots this refresh released are zero-filled. If the cursor tile is a pick, repoint
-        /// CurrentPositionIndex at that pick's slot so the ghost stays on the cursor tile.
-        /// Non-settlement evaluations return without writing.
+        /// Rewrite the tail for one refresh (simulation thread): the cursor slot first, from the
+        /// advisor's unmasked gate call - the failure flags and the cost trio land on the
+        /// evaluation, where the camp mouse marker, the territory highlight, the camp mouse marker
+        /// and vanilla's hovered-pin rule read them, and the entry is the hovered tile's own scored
+        /// record with no glyph - then each member's pick slot, written Showable, so the glyph set
+        /// is the published membership. Slots this refresh released, and every slot above the count,
+        /// are zeroed. The cursor index points at the cursor slot; the no-entry shape points it at
+        /// nothing. Non-settlement evaluations return without writing.
         /// </summary>
-        public void Write(CampPlacementEvaluation evaluation, Pick[] picks, int cursorTile)
+        public void Write(CampPlacementEvaluation evaluation, Pick[] picks, CursorSlot cursor)
         {
-            if (evaluation.SettleType != ArmyActionType.CreateCamp)
+            if (!ModePolicy.IsWired(evaluation.SettleType))
                 return;
 
+            var window = WindowFor(evaluation);
             var tiles = evaluation.ValidTiles;
             int count = evaluation.ValidTileCount;
 
-            if (m_TailStart < 0)
-                m_TailStart = count; // activation patch never ran: baseline from the current count
+            if (window.TailStart < 0)
+                window.TailStart = count; // activation patch never ran: baseline from the current count
 
-            int tailEnd = m_TailStart + 1 + picks.Length; // cursor slot + pick slots
+            int tailEnd = window.TailStart + 1 + picks.Length; // cursor slot + pick slots
             int needed = Math.Max(count, tailEnd);
+            int windowEnd = window.TailStart + 1 + TailCapacity; // the window this writer owns
 
-            if (tiles == null || tiles.Length < needed)
+            int grown = tiles == null ? 0 : tiles.Length;
+            int capacity = Math.Max(needed, windowEnd);
+            if (tiles == null || tiles.Length < capacity)
             {
-                Array.Resize(ref tiles, needed + TailCapacity);
+                Array.Resize(ref tiles, capacity);
                 evaluation.ValidTiles = tiles;
-                var grown = Plugin.Instance;
-                if (grown != null)
-                    grown.Log("tail capacity grown to " + tiles.Length);
+                var grew = Plugin.Instance;
+                if (grew != null)
+                    grew.Log("tail capacity grown to " + tiles.Length);
             }
             var flags = evaluation.ConditionalFlagsTileIndexes;
-            if (flags != null && flags.Length < needed)
+            if (flags != null && flags.Length < capacity)
             {
-                Array.Resize(ref flags, needed + TailCapacity);
+                Array.Resize(ref flags, capacity);
                 evaluation.ConditionalFlagsTileIndexes = flags;
             }
 
-            // Picks go at invariant slots; TailStart itself is vanilla's cursor entry slot.
-            // Showable is advisor-written membership: the published set is the only glyph source
-            // in the advisor's slots, and vanilla's own entries keep their own glyphs.
+            // The cursor slot: the advisor's own TailStart entry, and the single surviving path to
+            // the ghost, the territory highlight, the camp mouse marker and the hovered-pin rule in
+            // a mode the advisor has taken over.
+            var slot = cursor.Answered ? cursor.Entry : Scrubbed();
+            slot.Showable = false; // no glyph on the cursor slot: the pick slots own the shown set
+            tiles[window.TailStart] = slot;
+            if (flags != null)
+                flags[window.TailStart] = DistrictPlacementConditionFlags.None;
+            evaluation.SettleFailure = cursor.Failure;
+            evaluation.InstantMoneyCost = cursor.MoneyCost;
+            evaluation.InstantInfluenceCost = cursor.InfluenceCost;
+            evaluation.InstantUnitCost = cursor.UnitCost;
+
+            // Picks go at invariant slots above the cursor slot. Showable is advisor-written
+            // membership: the published set is the only glyph source in the advisor's slots, and
+            // vanilla's own entries keep their own glyphs.
             for (int i = 0; i < picks.Length; i++)
             {
                 var entry = picks[i].Data;
                 entry.Showable = true;
-                tiles[m_TailStart + 1 + i] = entry;
+                tiles[window.TailStart + 1 + i] = entry;
                 if (flags != null)
-                    flags[m_TailStart + 1 + i] = DistrictPlacementConditionFlags.None;
+                    flags[window.TailStart + 1 + i] = DistrictPlacementConditionFlags.None;
             }
 
-            // Slots the previous refresh owned and this one released: zeroed, so no stale pick
-            // keeps a glyph, a pin slot, or a score inside the live count.
-            for (int i = tailEnd; i < needed; i++)
-            {
-                var released = default(DistrictPlacementEvaluation.ValidTile);
-                released.Initialize(-1);
-                tiles[i] = released;
-                if (flags != null)
-                    flags[i] = DistrictPlacementConditionFlags.None;
-            }
+            // Slots the previous refresh owned and this one released, and the slots the array
+            // growth just created: zeroed, so a stale pick keeps no glyph, no pin slot and no
+            // score, and nothing above the live count is ever read (SPEC section 6 row 3).
+            ZeroFill(evaluation, tailEnd, Math.Max(needed, Math.Max(capacity, grown)));
 
             Thread.MemoryBarrier(); // release: tail entries are visible before the count rises
 
-            if (cursorTile >= 0)
-            {
-                for (int i = m_TailStart + 1; i < tailEnd; i++)
-                {
-                    if (tiles[i].TileIndex == cursorTile)
-                    {
-                        evaluation.CurrentPositionIndex = i; // pick slot: the cursor's own entry
-                        break;
-                    }
-                }
-            }
-
+            evaluation.CurrentPositionIndex = cursor.Answered ? window.TailStart : -1;
             evaluation.ValidTileCount = needed;
         }
 
         /// <summary>
-        /// Drop the advisor's contribution (inactive or failure path). Count can never shrink
-        /// below what a previous Write raised (vanilla's cursor entry may sit above the tail),
-        /// so the pick slots are also scrubbed: stale pick tiles must not sit inside the live
-        /// ValidTileCount window (a duplicate of vanilla's best tile would render two pins).
+        /// Drop the advisor's contribution (inactive or failure path): the cursor slot scrubs to
+        /// the no-entry shape, the pick slots scrub with it, and the cursor index points at
+        /// nothing. INACTIVE displays nothing, so no cursor entry stays live.
         /// </summary>
         public void ClearTail(CampPlacementEvaluation evaluation)
         {
-            Write(evaluation, s_Empty, -1);
-            ReleaseTail(evaluation);
+            Write(evaluation, s_Empty, CursorSlot.Unanswered);
         }
 
         /// <summary>
-        /// Scrub only the slots this advisor reserved. Needed on a mode switch because Write
-        /// lowers the count but keeps its entries, and vanilla Initialize never zeroes them.
-        /// Zeroed entries are skipped by vanilla; no-op when no tail was reserved.
+        /// Release the whole window this advisor reserved on this evaluation, cursor slot included,
+        /// and let the next activation re-baseline. Needed on a mode switch because Write keeps its
+        /// entries, and vanilla Initialize never zeroes them. Zeroed entries are skipped by vanilla;
+        /// no-op when no tail was reserved.
         /// </summary>
         private void ReleaseTail(CampPlacementEvaluation evaluation)
         {
-            if (m_TailStart < 0)
+            TailWindow window;
+            if (!m_Windows.TryGetValue(evaluation, out window) || window.TailStart < 0)
                 return;
 
             var tiles = evaluation.ValidTiles;
             if (tiles != null)
+                ZeroFill(evaluation, window.TailStart, Math.Min(tiles.Length, window.TailStart + 1 + TailCapacity));
+
+            var flags = evaluation.ConditionalFlagsTileIndexes;
+            if (flags != null)
             {
-                int end = Math.Min(tiles.Length, m_TailStart + 1 + TailCapacity);
-                for (int i = m_TailStart + 1; i < end; i++)
-                {
-                    var cleared = default(DistrictPlacementEvaluation.ValidTile);
-                    cleared.Initialize(-1); // Showable=false, zero FIMS: vanilla skips this slot
-                    tiles[i] = cleared;
-                }
+                int end = Math.Min(flags.Length, window.TailStart + 1 + TailCapacity);
+                for (int i = window.TailStart; i < end; i++)
+                    flags[i] = DistrictPlacementConditionFlags.None;
+            }
+
+            window.TailStart = -1; // the next settlement activation re-baselines
+        }
+
+        private TailWindow WindowFor(CampPlacementEvaluation evaluation)
+        {
+            TailWindow window;
+            if (!m_Windows.TryGetValue(evaluation, out window))
+            {
+                window = new TailWindow();
+                m_Windows[evaluation] = window;
+            }
+            return window;
+        }
+
+        /// <summary>The scrubbed entry shape vanilla skips: no tile, no FIMS, no glyph.</summary>
+        private static DistrictPlacementEvaluation.ValidTile Scrubbed()
+        {
+            var cleared = default(DistrictPlacementEvaluation.ValidTile);
+            cleared.Initialize(-1);
+            return cleared;
+        }
+
+        /// <summary>Zero the advisor-owned slots in [from, to): the writer's zero-fill duty above
+        /// the live count (SPEC section 6 row 3).</summary>
+        private void ZeroFill(CampPlacementEvaluation evaluation, int from, int to)
+        {
+            var tiles = evaluation.ValidTiles;
+            if (tiles != null)
+            {
+                int end = Math.Min(tiles.Length, to);
+                for (int i = Math.Max(from, 0); i < end; i++)
+                    tiles[i] = Scrubbed();
             }
 
             var flags = evaluation.ConditionalFlagsTileIndexes;
             if (flags != null)
             {
-                int end = Math.Min(flags.Length, m_TailStart + 1 + TailCapacity);
-                for (int i = m_TailStart + 1; i < end; i++)
+                int end = Math.Min(flags.Length, to);
+                for (int i = Math.Max(from, 0); i < end; i++)
                     flags[i] = DistrictPlacementConditionFlags.None;
             }
-
-            m_TailStart = -1; // the next settlement activation re-baselines
         }
     }
 }

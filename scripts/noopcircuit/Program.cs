@@ -44,6 +44,10 @@ internal sealed class GraphSurface : GameSurface
     public ArmyActionFailureFlags_Part1 ArmyGateFlags;
     public Dictionary<int, ArmyActionFailureFlags_Part1> TileGateFlags = new Dictionary<int, ArmyActionFailureFlags_Part1>();
     public int TileGateCalls;
+    public int UnmaskedGateCalls; // the cursor slot asks unmasked: money and influence stay in
+    public Dictionary<int, FixedPoint> TileGateMoney = new Dictionary<int, FixedPoint>();
+    public Dictionary<int, FixedPoint> TileGateInfluence = new Dictionary<int, FixedPoint>();
+    public Dictionary<int, FixedPoint> TileGateUnit = new Dictionary<int, FixedPoint>();
 
     public bool EvaluateTile(object army, int tileIndex, object districtDefinition, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
     {
@@ -97,19 +101,27 @@ internal sealed class GraphSurface : GameSurface
         return true;
     }
 
-    /// <summary>The mode's tile gate: scripted per-tile flags, with the mask applied when the
-    /// pipeline asks for it, and a call counter so "no tile asked" is checkable.</summary>
+    /// <summary>The mode's tile gate: scripted per-tile flags and costs, with the mask applied when
+    /// the pipeline asks for it, and call counters so "no tile asked" and "the cursor slot asked
+    /// unmasked" are both checkable.</summary>
     public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence,
         out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
     {
         TileGateCalls++;
+        if (!maskMoneyAndInfluence) UnmaskedGateCalls++;
         ArmyActionFailureFlags_Part1 scripted;
         failures = (ArmyActionFailureFlags)(TileGateFlags.TryGetValue(tileIndex, out scripted) ? scripted : 0);
         if (maskMoneyAndInfluence) failures = (ArmyActionFailureFlags)GameApi.ApplyMoneyInfluenceMask(failures);
-        moneyCost = FixedPoint.Zero;
-        influenceCost = FixedPoint.Zero;
-        unitCost = FixedPoint.Zero;
+        moneyCost = Cost(TileGateMoney, tileIndex);
+        influenceCost = Cost(TileGateInfluence, tileIndex);
+        unitCost = Cost(TileGateUnit, tileIndex);
         return army != null;
+    }
+
+    private static FixedPoint Cost(Dictionary<int, FixedPoint> byTile, int tileIndex)
+    {
+        FixedPoint declared;
+        return byTile.TryGetValue(tileIndex, out declared) ? declared : FixedPoint.Zero;
     }
 
     public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
@@ -203,11 +215,16 @@ internal static class Program
         return sb.ToString();
     }
 
-    /// <summary>Drive the real settlement-evaluation postfix (the advisor's entry point per refresh).</summary>
-    private static void Refresh(CampPlacementEvaluation eval, int cursorTile)
+    /// <summary>
+    /// Drive the real per-refresh entry (the UpdateCurrentPosition takeover). Its return value is
+    /// vanilla's own answer: false = vanilla's body, its hover append rule included, is skipped and
+    /// the advisor owns the cursor slot; true = vanilla keeps running its own refresh, its own
+    /// cursor entry included, and the advisor writes nothing.
+    /// </summary>
+    private static bool Refresh(CampPlacementEvaluation eval, int cursorTile)
     {
-        var postfix = typeof(SettlementEvaluationPatch).GetMethod("Postfix", BindingFlags.NonPublic | BindingFlags.Static);
-        postfix.Invoke(null, new object[] { eval, cursorTile, new SimulationEntityGUID(1UL) });
+        var prefix = typeof(SettlementEvaluationPatch).GetMethod("Prefix", BindingFlags.NonPublic | BindingFlags.Static);
+        return (bool)prefix.Invoke(null, new object[] { eval, cursorTile, new SimulationEntityGUID(1UL) });
     }
 
     /// <summary>
@@ -270,11 +287,16 @@ internal static class Program
         return true;
     }
 
-    /// <summary>How many of the published pick tiles appear as evaluation entries.</summary>
-    private static int ScanTailHits(CampPlacementEvaluation e, int[] tiles)
+    /// <summary>
+    /// How many of the published pick tiles appear at the advisor's PICK slots, i.e. from `from`
+    /// (the writer's cursor slot + 1) to the end of the array. The cursor slot is excluded: on the
+    /// refresh it holds the hovered tile's own entry, which is a member whenever the cursor hovers
+    /// a pick - counting it would double one tile and make the pick-slot count unreadable.
+    /// </summary>
+    private static int ScanTailHits(CampPlacementEvaluation e, int[] tiles, int from)
     {
         var hits = 0;
-        for (int i = 0; i < e.ValidTiles.Length; i++)
+        for (int i = System.Math.Max(from, 0); i < e.ValidTiles.Length; i++)
             for (int t = 0; t < tiles.Length; t++)
                 if (e.ValidTiles[i].TileIndex == tiles[t]) hits++;
         return hits;
@@ -289,14 +311,15 @@ internal static class Program
         return true;
     }
 
-    /// <summary>Every advisor slot a published member occupies: the FIMS yields vanilla's
+    /// <summary>Every advisor pick slot a published member occupies: the FIMS yields vanilla's
     /// zero-gains-and-zero-losses pin filter tests (PlacementPinsSubset.cs:52-55). The synthetic
     /// surface evaluates tiles through ValidTile.Initialize, which is a zero-yield tile, so every
-    /// member the advisor admits here is one vanilla's filter rejects a pin for.</summary>
-    private static bool AllMemberEntriesZeroYield(CampPlacementEvaluation e, int[] members)
+    /// member the advisor admits here is one vanilla's filter rejects a pin for. The cursor slot is
+    /// excluded: its tile is the hovered tile, a member whenever the cursor sits on a pick.</summary>
+    private static bool AllMemberEntriesZeroYield(CampPlacementEvaluation e, int[] members, int from)
     {
         var seen = 0;
-        for (int i = 0; i < e.ValidTileCount; i++)
+        for (int i = System.Math.Max(from, 0); i < e.ValidTileCount; i++)
         {
             var entry = e.ValidTiles[i];
             if (!ContainsTile(members, entry.TileIndex)) continue;
@@ -312,6 +335,23 @@ internal static class Program
         var cleared = default(DistrictPlacementEvaluation.ValidTile);
         cleared.Initialize(-1);
         return cleared;
+    }
+
+    /// <summary>
+    /// Every advisor-owned slot above the live count - the cursor slot plus TailCapacity slots, the
+    /// window the writer reserves - is the zeroed shape: no tile, no FIMS, no glyph. SPEC section 6
+    /// row 3, the advisor's duty from the reservation on.
+    /// </summary>
+    private static bool ZeroFilledAboveCount(CampPlacementEvaluation e, int count, int windowEnd)
+    {
+        for (int i = count; i < System.Math.Min(e.ValidTiles.Length, windowEnd); i++)
+        {
+            var entry = e.ValidTiles[i];
+            if (entry.TileIndex != -1) return false;
+            if (entry.OverallGains.CountFimsType() != 0 || entry.OverallLosses.CountFimsType() != 0) return false;
+            if (entry.Showable) return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -426,7 +466,7 @@ internal static class Program
             (PickSet.Current == null ? 0 : PickSet.Current.Version) == version && Signature(city) == clean);
 
         var stray = new Pick { Tile = 7777, Score = 9, Data = city.ValidTiles[0] };
-        plugin.Writer.Write(city, new[] { stray }, 5001);
+        plugin.Writer.Write(city, new[] { stray }, CursorSlot.Unanswered);
         Check("FoundCity: Write is a no-op", Signature(city) == clean);
         plugin.Writer.ClearTail(city);
         Check("FoundCity: ClearTail is a no-op", Signature(city) == clean);
@@ -446,6 +486,8 @@ internal static class Program
         plugin.Writer.NoteActivation(settlement);
         Check("CreateCamp activation reserves the tail window",
             settlement.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity);
+        Check("the cursor slot is the activation baseline",
+            plugin.Writer.CursorSlotIndex(settlement) == baseline);
 
         Refresh(settlement, 131); // cursor tile inside the synthetic territory space (territory 3)
         var tiles = PickSet.Current == null || PickSet.Current.Tiles == null ? new int[0] : PickSet.Current.Tiles;
@@ -463,6 +505,13 @@ internal static class Program
             VanillaGlyphs(settlement, baseline) == settlementGlyphs);
         plugin.Stars.Render(PickSet.Current);
         Check("settlement pick set starts one star per pick", canvas.Started == tiles.Length);
+
+        // The tail slots the cursor hovers outside any pick: the refresh writes the cursor slot
+        // itself and points the cursor index at it, and the slots this refresh releases zero-fill
+        // above the live count (SPEC section 6 row 3).
+        Check("every advisor slot above the live count is zeroed",
+            ZeroFilledAboveCount(settlement, settlement.ValidTileCount,
+                plugin.Writer.CursorSlotIndex(settlement) + 1 + EvaluationWriter.TailCapacity));
 
         // A smaller admission set releases slots. The writer zero-fills what it released, so
         // inside the live count the published membership stays the only live entry set.
@@ -643,7 +692,7 @@ internal static class Program
         Check("camp takeover reserves the activation baseline",
             scanEval.ValidTileCount == 0 && scanEval.ValidTiles.Length >= 1 + EvaluationWriter.TailCapacity);
         Check("camp takeover publishes the admission set", !Inactive() && AscendingUnique(PickSet.Current.Tiles));
-        Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PickSet.Current.Tiles) == 0);
+        Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PickSet.Current.Tiles, 1) == 0);
         Check("camp takeover leaves the best-camp arrays retired",
             AllMinusOne(scanEval.BestCampPlacementTileIndexes) && AllMinusOne(scanEval.BestCampPlacementIndexes));
         Check("no mod code reads the best-camp array: a populated best tile outside the set shows no pin",
@@ -717,7 +766,7 @@ internal static class Program
         // advisor's gate admits both - the yield reject and the on-screen culling live in the
         // sealed filter chain vanilla owns, which the mod never patches.
         Check("every published member entry carries the zero-yield fact the vanilla yield filter rejects",
-            AllMemberEntriesZeroYield(scanEval, admitted));
+            AllMemberEntriesZeroYield(scanEval, admitted, plugin.Writer.CursorSlotIndex(scanEval) + 1));
         Check("vanilla's unpatched filter chain runs, and rejects the writer's scrubbed slot",
             !VanillaPinFilter(ScrubbedEntry()));
         Check("the gate carries no yield rule of its own: every zero-yield member is admitted",
@@ -776,6 +825,82 @@ internal static class Program
         Check("the resource tile is excluded from admission", !Inactive() && !PickSet.Current.Contains(133));
         surface.ResourceTiles.Clear();
 
+
+        // H. The cursor slot (ticket 16). Every refresh of a taken-over mode writes the TailStart
+        // entry itself, from the mode gate call with NO mask: the failure flags and the three
+        // instant costs land on the evaluation where the camp mouse marker reads them, the cursor
+        // index points at that slot, and vanilla's append-one-tile hover rule never runs. An
+        // unaffordable pick is the same entry an affordable one is: star, pin and shown set
+        // unchanged, the failure appearing on hover.
+        int cursorSlot = plugin.Writer.CursorSlotIndex(scanEval); // 0: this evaluation's activation baseline
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughMoney | ArmyActionFailureFlags_Part1.NotEnoughInfluence;
+        surface.TileGateMoney[131] = (FixedPoint)40;
+        surface.TileGateInfluence[131] = (FixedPoint)25;
+        surface.TileGateUnit[131] = (FixedPoint)8;
+        surface.DistrictFrame++;
+        int maskedBefore = surface.TileGateCalls, unmaskedBefore = surface.UnmaskedGateCalls;
+        bool vanillaRefreshSkipped = !Refresh(scanEval, 131);
+        var hoveredSet = PickSet.Current.Tiles;
+        var slotEntry = scanEval.ValidTiles[cursorSlot];
+        Check("the advisor owns the refresh: vanilla's whole hover body, append rule included, is skipped",
+            vanillaRefreshSkipped);
+        Check("the cursor slot comes from the mode gate call with no mask",
+            surface.UnmaskedGateCalls > unmaskedBefore && surface.TileGateCalls > maskedBefore);
+        Check("the cursor index points at the advisor's own slot, on the hovered tile",
+            scanEval.CurrentPositionIndex == cursorSlot && slotEntry.TileIndex == 131);
+        Check("the unaffordable hovered tile shows its failure flags and its three instant costs",
+            (scanEval.SettleFailure & (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughMoney) != 0
+            && (scanEval.SettleFailure & (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughInfluence) != 0
+            && scanEval.InstantMoneyCost == (FixedPoint)40
+            && scanEval.InstantInfluenceCost == (FixedPoint)25
+            && scanEval.InstantUnitCost == (FixedPoint)8);
+        Check("the cursor slot carries no glyph of its own", !slotEntry.Showable);
+        Check("the advisor writes the cursor slot once: the array stays at the reserved window",
+            scanEval.ValidTiles.Length == cursorSlot + 1 + EvaluationWriter.TailCapacity);
+        // The gate reads the presentation evaluation of the snapshot - the same instance a
+        // refresh writes in the game, so the harness points it at the evaluation under test.
+        snapshot.PresentationData.PlacementEvaluation = scanEval;
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        Check("hovering the unaffordable pick stops no star, and the tile stays a member",
+            canvas.Stopped == 0 && ContainsTile(hoveredSet, 131));
+        Check("the pick slot entry for the same tile is the affordable pick's shape: shown, scored",
+            ShowableIsMembership(scanEval, 0, hoveredSet));
+        // The pin gate's hovered rule (SettlementPlacementPinsSubset.cs:29-33) answers from the
+        // flags the advisor wrote: money drops the pin on hover, influence-only keeps it, a clean
+        // hover keeps it. Membership, stars and glyph flags never move.
+        Check("the pin gate's hovered rule reads the advisor-written cursor-slot flags",
+            !GateAnswer(131));
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughInfluence;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        Check("an influence-only hover failure keeps the member pin", GateAnswer(131));
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.None;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        Check("the clean hover shows no failure flags on the same slot the affordable pick owns",
+            scanEval.SettleFailure == ArmyActionFailureFlags.None
+            && scanEval.CurrentPositionIndex == cursorSlot
+            && scanEval.ValidTiles[cursorSlot].TileIndex == 131
+            && GateAnswer(131));
+        Check("hovering the pick is the affordable shape: same membership, same star set",
+            PickSet.Current.Tiles.Length == hoveredSet.Length && ShowableIsMembership(scanEval, 0, hoveredSet));
+        surface.TileGateFlags.Clear();
+        Check("every advisor slot above the live count is zeroed, cursor slot window included",
+            ZeroFilledAboveCount(scanEval, scanEval.ValidTileCount,
+                cursorSlot + 1 + EvaluationWriter.TailCapacity));
+        var keptVanilla = NewEvaluation(ArmyActionType.FoundCity, baseline);
+        var keptSignature = Signature(keptVanilla);
+        Check("a mode not taken over keeps vanilla's own refresh, its own cursor entry included",
+            Refresh(keptVanilla, 5001) && Signature(keptVanilla) == keptSignature && Inactive());
+
+        // A cursor outside the world answers nothing: the cursor slot scrubs and the cursor index
+        // points at nothing.
+        Refresh(scanEval, 5099);
+        Check("a cursor with no territory scrubs the cursor slot and points the index at nothing",
+            scanEval.CurrentPositionIndex == -1 && scanEval.ValidTiles[cursorSlot].TileIndex == -1
+            && scanEval.SettleFailure == ArmyActionFailureFlags.None);
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
         return s_Failures == 0 ? 0 : 1;
     }
