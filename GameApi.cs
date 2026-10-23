@@ -1,4 +1,5 @@
 using System;
+using System.Linq.Expressions;
 using System.Collections.Generic;
 using System.Reflection;
 using Amplitude; // FixedPoint lives in namespace Amplitude (assembly Amplitude.Framework.dll).
@@ -13,12 +14,15 @@ using SnapshotTerritory = Amplitude.Mercury.Interop.AI.Entities.Territory; // sn
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// GameSurface implemented by reflection. Resolve() binds every name in RequiredNames:
-    /// Sandbox statics are assigned at sandbox initialization, so values are read lazily. Any
-    /// unresolved name leaves the surface not-ready with the full failure list, never a partial
-    /// binding. Territory facts, the snapshot territory graph and the district definitions use
-    /// the public layers directly; the gates, the terrain rule, the explored predicate and the
-    /// scoring primitive are simulation internals and reach the game through reflection.
+    /// GameSurface implemented by reflection. Resolve() binds every name in RequiredNames and
+    /// compiles the hot-path members into strongly-typed delegates in the same pass: Sandbox
+    /// statics are assigned at sandbox initialization, so values are read lazily. Any
+    /// unresolved name, or a hot member whose delegate cannot compile, leaves the surface
+    /// not-ready with the full failure list, never a partial binding. Territory facts, the
+    /// snapshot territory graph and the district definitions use the public layers directly;
+    /// the gates, the terrain rule, the explored predicate and the scoring primitive are
+    /// simulation internals: startup binds them as compiled delegates, so the per-tile hot
+    /// path calls delegates, never MethodInfo.Invoke with a freshly boxed object[].
     /// </summary>
     internal sealed class GameApi : GameSurface
     {
@@ -26,6 +30,33 @@ namespace SettlementPlacementAdvisor
 
         public static bool ReadyStatic;
         public static string ResolveError = string.Empty;
+
+        // The hot-path binding shapes: per-tile pre-filter, tile gate, explored predicate and
+        // scoring. Resolve compiles each one into the strongly-typed delegate below, so the scan
+        // hot path carries its ref arguments on the stack: no per-call object[], no boxed
+        // structs, no reflection invoke.
+        private delegate void EvaluateOnePlacement(object evaluator, object army,
+            ref DistrictPlacementEvaluation.ValidTile validTile, int tileIndex,
+            object districtDefinition, object startingPack);
+
+        /// <summary>The settle-cost trio the camp tile gate marshals by ref (ArmyActionHelper.cs:465).</summary>
+        private struct GateCosts
+        {
+            public FixedPoint Money;
+            public FixedPoint Influence;
+            public FixedPoint Unit;
+        }
+
+        /// <summary>The WorldPosition the FoundCity position gate takes, carried by ref: no boxing per call.</summary>
+        private struct PositionCarrier
+        {
+            public Amplitude.Mercury.WorldPosition Value;
+        }
+
+        private delegate ArmyActionFailureFlags CampTileGate(object army, int tileIndex, ref GateCosts costs);
+        private delegate ArmyActionFailureFlags PositionTileGate(object army, PositionCarrier carrier, ref ArmyActionFailureFlags failures);
+        private delegate ArmyActionFailureFlags TileFlagsTileGate(object army, int tileIndex, ref ArmyActionFailureFlags failures);
+        private delegate void TilePositionWriter(ref PositionCarrier carrier, int tileIndex);
 
         // Member labels: the failure-list identity, the binding table key, and the adapter key.
         // Every one of them is a name Resolve() checks at startup, so no member the mod reflects
@@ -164,6 +195,7 @@ namespace SettlementPlacementAdvisor
         private static Dictionary<string, MethodInfo> s_Methods = new Dictionary<string, MethodInfo>();
         private static Dictionary<string, MemberInfo> s_Members = new Dictionary<string, MemberInfo>();
         private static MethodInfo s_ArmyLookup; // TryGetSimulationEntity instantiated for Army
+        private static Dictionary<string, Delegate> s_Compiled = new Dictionary<string, Delegate>(); // hot labels -> compiled delegates
 
 
         public bool Ready => ReadyStatic;
@@ -200,6 +232,7 @@ namespace SettlementPlacementAdvisor
                 var fields = new Dictionary<string, FieldInfo>();
                 var methods = new Dictionary<string, MethodInfo>();
                 var members = new Dictionary<string, MemberInfo>();
+                var compiled = new Dictionary<string, Delegate>();
                 var armyType = FindType(ArmyTypeName);
 
                 foreach (var binding in s_Bindings)
@@ -248,6 +281,7 @@ namespace SettlementPlacementAdvisor
                     var method = FindMethod(owner, binding.Member, Shape(binding.Shape, armyType));
                     if (method == null) failures.Add(binding.Label);
                     else methods[binding.Label] = method;
+                    TryCompileHot(binding.Label, method, failures, compiled);
                 }
 
                 ReadyStatic = failures.Count == 0;
@@ -255,12 +289,171 @@ namespace SettlementPlacementAdvisor
                 s_Fields = fields;
                 s_Methods = methods;
                 s_Members = members;
+                s_Compiled = compiled;
             }
             catch (Exception e)
             {
                 ReadyStatic = false;
                 ResolveError = "exception: " + e.Message;
             }
+        }
+
+        /// <summary>
+        /// Compiling the hot delegates is part of the binding pass: a hot member must compile at
+        /// startup exactly like it must resolve. A failure lands in the startup failure list, so
+        /// the surface never reports ready on a partial binding (fail-closed binding).
+        /// </summary>
+        private static void TryCompileHot(string label, MethodInfo method, List<string> failures, Dictionary<string, Delegate> compiled)
+        {
+            if (method == null || !IsHotLabel(label)) return;
+            try
+            {
+                compiled[label] = CreateCompiled(label, method);
+            }
+            catch (Exception e)
+            {
+                failures.Add(label + " (compiled delegate: " + e.Message + ")");
+            }
+        }
+
+        /// <summary>
+        /// The labels whose per-tile work runs on a compiled delegate: the tile gates, the terrain
+        /// rule, the explored predicate, the scoring primitive and the tile-position helper. The
+        /// army gates (one call per refresh) and the Harmony patch targets stay method-bound.
+        /// </summary>
+        private static bool IsHotLabel(string label)
+        {
+            return label == ModePolicy.CampTileGateLabel
+                || label == ModePolicy.FoundCityTileGateLabel
+                || label == ModePolicy.SettlerTileGateLabel
+                || label == TerrainAndPoi
+                || label == Explored
+                || label == EvaluateOne
+                || label == PonderationInit
+                || label == TileToPosition;
+        }
+
+        /// <summary>
+        /// The compiled delegate of one hot label: a strongly-typed lambda over the exact overload
+        /// FindMethod selected (Linq.Expressions; ref and struct arguments pass through). The
+        /// object-typed lambda parameters keep the marshaling in the adapter; the expression tree
+        /// inserts the game-side casts.
+        /// </summary>
+        private static Delegate CreateCompiled(string label, MethodInfo method)
+        {
+            var p = method.GetParameters();
+            if (label == ModePolicy.CampTileGateLabel)
+                return GateCampTile(method);
+            if (label == ModePolicy.FoundCityTileGateLabel)
+                return GatePositionFlags(method);
+            if (label == ModePolicy.SettlerTileGateLabel)
+                return GateTileFlags(method);
+            if (label == EvaluateOne)
+            {
+                var evaluator = Expression.Parameter(typeof(object), "evaluator");
+                var army = Expression.Parameter(typeof(object), "army");
+                var tile = Expression.Parameter(p[1].ParameterType, "validTile"); // ref ValidTile passes through
+                var tileIndex = Expression.Parameter(typeof(int), "tileIndex");
+                var definition = Expression.Parameter(typeof(object), "districtDefinition");
+                var startingPack = Expression.Parameter(typeof(object), "startingPack");
+                return Expression.Lambda<EvaluateOnePlacement>(
+                    Expression.Call(Expression.Convert(evaluator, method.DeclaringType), method,
+                        Expression.Convert(army, p[0].ParameterType), tile, tileIndex,
+                        Expression.Convert(definition, p[3].ParameterType),
+                        Expression.Convert(startingPack, p[4].ParameterType)), // the adapter passes the pack as null
+                    evaluator, army, tile, tileIndex, definition, startingPack).Compile();
+            }
+            if (label == TerrainAndPoi)
+            {
+                var definition = Expression.Parameter(typeof(object), "districtDefinition");
+                var tileIndex = Expression.Parameter(typeof(int), "tileIndex");
+                return Expression.Lambda<Func<object, int, bool>>(
+                    Expression.Call(method, Expression.Convert(definition, p[0].ParameterType), tileIndex),
+                    definition, tileIndex).Compile();
+            }
+            if (label == Explored)
+            {
+                var controller = Expression.Parameter(typeof(object), "visibilityController");
+                var tileIndex = Expression.Parameter(typeof(int), "tileIndex");
+                var bits = Expression.Parameter(typeof(int), "bits");
+                return Expression.Lambda<Func<object, int, int, bool>>(
+                    Expression.Call(Expression.Convert(controller, method.DeclaringType), method, tileIndex, bits),
+                    controller, tileIndex, bits).Compile();
+            }
+            if (label == PonderationInit)
+            {
+                var evaluator = Expression.Parameter(typeof(object), "evaluator");
+                return Expression.Lambda<Action<object>>(
+                    Expression.Call(Expression.Convert(evaluator, method.DeclaringType), method), evaluator).Compile();
+            }
+            var carrier = Expression.Parameter(typeof(PositionCarrier).MakeByRefType(), "carrier");
+            var toTile = Expression.Parameter(typeof(int), "tileIndex");
+            var offset = Expression.Variable(method.ReturnType, "offset"); // Hexagon.OffsetCoords
+            var ctor = method.DeclaringType.GetConstructor(new[] { method.ReturnType });
+            var body = Expression.Block(new[] { offset },
+                Expression.Assign(offset, Expression.Call(method, toTile)),
+                Expression.Assign(Expression.Field(carrier, "Value"), Expression.New(ctor, offset))); // the WorldPosition
+            return Expression.Lambda<TilePositionWriter>(body, carrier, toTile).Compile();
+        }
+
+        /// <summary>
+        /// The camp tile gate lambda: the game's flags ref binds to a block local the lambda
+        /// returns, and the settle-cost trio's refs bind to the fields of the ref costs struct,
+        /// so per call the gate sees exactly the game signature with no boxes.
+        /// </summary>
+        private static Delegate GateCampTile(MethodInfo method)
+        {
+            var p = method.GetParameters();
+            var army = Expression.Parameter(typeof(object), "army");
+            var tileIndex = Expression.Parameter(typeof(int), "tileIndex");
+            var costs = Expression.Parameter(typeof(GateCosts).MakeByRefType(), "costs");
+            var flags = Expression.Parameter(p[2].ParameterType.GetElementType(), "failureFlags");
+            var call = Expression.Call(method,
+                Expression.Convert(army, p[0].ParameterType),
+                tileIndex, flags,
+                Expression.Field(costs, "Money"),
+                Expression.Field(costs, "Influence"),
+                Expression.Field(costs, "Unit"));
+            return Expression.Lambda<CampTileGate>(
+                Expression.Block(new[] { flags }, call, flags),
+                army, tileIndex, costs).Compile();
+        }
+
+        /// <summary>
+        /// The FoundCity position gate lambda: the WorldPosition is read out of the carrier the
+        /// tile-position writer filled (a 16-byte struct by value, no boxing), the flags ref
+        /// binds to a block local the lambda returns.
+        /// </summary>
+        private static Delegate GatePositionFlags(MethodInfo method)
+        {
+            var p = method.GetParameters();
+            var army = Expression.Parameter(typeof(object), "army");
+            var carrier = Expression.Parameter(typeof(PositionCarrier), "carrier");
+            var flagsRef = Expression.Parameter(p[2].ParameterType, "failureFlags"); // the delegate's ref parameter
+            var flags = Expression.Parameter(p[2].ParameterType.GetElementType(), "failures"); // the block local
+            var call = Expression.Call(method,
+                Expression.Convert(army, p[0].ParameterType),
+                Expression.Field(carrier, "Value"), flags); // the local is the ref argument's storage
+            return Expression.Lambda<PositionTileGate>(
+                Expression.Block(new[] { flags }, call, flags),
+                army, carrier, flagsRef).Compile();
+        }
+
+        /// <summary>
+        /// The settler tile gate lambda: army cast inserted, the tile index and the flags ref
+        /// pass through, the flags local the game fills is the lambda's return value.
+        /// </summary>
+        private static Delegate GateTileFlags(MethodInfo method)
+        {
+            var p = method.GetParameters();
+            var army = Expression.Parameter(typeof(object), "army");
+            var tileIndex = Expression.Parameter(typeof(int), "tileIndex");
+            var flagsRef = Expression.Parameter(p[2].ParameterType, "failureFlags"); // the delegate's ref parameter
+            var flags = Expression.Parameter(p[2].ParameterType.GetElementType(), "failures"); // the block local
+            var call = Expression.Call(method, Expression.Convert(army, p[0].ParameterType), tileIndex, flags); // the local is the ref argument's storage
+            return Expression.Lambda<TileFlagsTileGate>(
+                Expression.Block(new[] { flags }, call, flags),
+                army, tileIndex, flagsRef).Compile();
         }
 
         /// <summary>
@@ -275,12 +468,28 @@ namespace SettlementPlacementAdvisor
             return failures;
         }
 
+        /// <summary>
+        /// The compiled camp tile gate the scan-cost harness measures: the production hot-path
+        /// call shape (gate flags returned, settle-cost trio marshaled by ref). Null when the
+        /// surface never bound it.
+        /// </summary>
+        internal static Delegate CompiledCampTileGate()
+        {
+            return GetCompiled(ModePolicy.CampTileGateLabel);
+        }
+
         public bool IsSettlementSiteTile(object districtDefinition, int tileIndex)
         {
             if (districtDefinition == null) return false;
             try
             {
-                return (bool)Method(TerrainAndPoi).Invoke(null, new object[] { districtDefinition, tileIndex });
+                var terrainAndPoi = (Func<object, int, bool>)GetCompiled(TerrainAndPoi);
+                if (terrainAndPoi == null)
+                {
+                    Fail("unbound terrain rule " + TerrainAndPoi);
+                    return false;
+                }
+                return terrainAndPoi(districtDefinition, tileIndex);
             }
             catch (Exception e)
             {
@@ -347,7 +556,7 @@ namespace SettlementPlacementAdvisor
                 if (visibilityController == null) return true;
                 var bits = GetEmpireVisionBits(empireIndex);
                 if (bits == 0) return true;
-                return (bool)Method(Explored).Invoke(visibilityController, new object[] { tileIndex, bits });
+                return ((Func<object, int, int, bool>)GetCompiled(Explored))(visibilityController, tileIndex, bits);
             }
             catch (Exception e)
             {
@@ -399,9 +608,7 @@ namespace SettlementPlacementAdvisor
 
                 var vt = default(DistrictPlacementEvaluation.ValidTile);
                 vt.Initialize(tileIndex);
-                var args = new object[] { army, vt, tileIndex, districtDefinition, null };
-                Method(EvaluateOne).Invoke(evaluator, args);
-                vt = (DistrictPlacementEvaluation.ValidTile)args[1];
+                ((EvaluateOnePlacement)GetCompiled(EvaluateOne))(evaluator, army, ref vt, tileIndex, districtDefinition, null);
 
                 var fims = vt.OverallFims;
                 var ponderation = SettlementWeightTable(evaluator);
@@ -428,7 +635,7 @@ namespace SettlementPlacementAdvisor
         {
             var ponderation = (FimsInfo)Field(Ponderation).GetValue(evaluator);
             if (!ponderation.IsEmpty) return ponderation;
-            Method(PonderationInit).Invoke(evaluator, null);
+            ((Action<object>)GetCompiled(PonderationInit))(evaluator);
             return (FimsInfo)Field(Ponderation).GetValue(evaluator);
         }
 
@@ -563,9 +770,10 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// The mode's tile gate, dispatched by the mode-policy row: the row names the gate member
-        /// and its calling convention, and the adapter only marshals that shape. No mode switch
-        /// lives here (GLOSSARY: the mode-policy table is the single source).
+        /// The mode's tile gate, dispatched by the mode-policy row: the row names the gate's
+        /// startup-compiled delegate and its calling convention, and the adapter only marshals
+        /// that shape. No mode switch lives here (GLOSSARY: the mode-policy table is the single
+        /// source).
         /// </summary>
         public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence, out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
         {
@@ -581,15 +789,31 @@ namespace SettlementPlacementAdvisor
 
             try
             {
-                var args = GateArguments(row.TileGateShape, army, tileIndex, failures, moneyCost, influenceCost, unitCost);
-                if (args == null) return false; // the row names a shape the adapter cannot marshal
-                Method(row.TileGateLabel).Invoke(null, args);
-                failures = (ArmyActionFailureFlags)args[2];
-                if (row.TileGateShape == "campTile")
+                switch (row.TileGateShape)
                 {
-                    moneyCost = (FixedPoint)args[3];
-                    influenceCost = (FixedPoint)args[4];
-                    unitCost = (FixedPoint)args[5];
+                    case "campTile":
+                        var campGate = (CampTileGate)GetCompiled(row.TileGateLabel);
+                        if (campGate == null) return false; // the row names a gate the binding never compiled
+                        var costs = new GateCosts { Money = moneyCost, Influence = influenceCost, Unit = unitCost };
+                        failures = campGate(army, tileIndex, ref costs);
+                        moneyCost = costs.Money;
+                        influenceCost = costs.Influence;
+                        unitCost = costs.Unit;
+                        break;
+                    case "positionFlags":
+                        var positionGate = (PositionTileGate)GetCompiled(row.TileGateLabel);
+                        if (positionGate == null) return false; // the row names a gate the binding never compiled
+                        var carrier = new PositionCarrier();
+                        ((TilePositionWriter)GetCompiled(TileToPosition))(ref carrier, tileIndex);
+                        failures = positionGate(army, carrier, ref failures);
+                        break;
+                    case "tileFlags":
+                        var tileGate = (TileFlagsTileGate)GetCompiled(row.TileGateLabel);
+                        if (tileGate == null) return false; // the row names a gate the binding never compiled
+                        failures = tileGate(army, tileIndex, ref failures);
+                        break;
+                    default:
+                        return false; // the row names a shape the adapter cannot marshal
                 }
             }
             catch (Exception e)
@@ -606,7 +830,8 @@ namespace SettlementPlacementAdvisor
         /// The mode's army-level gate: every army gate the mode-policy row names, in its order,
         /// accumulating into one flag set - the shared army-state rows (decoy, battle lock, lock)
         /// first, then the mode's own army rows, which is what vanilla's own gates assemble. Ask
-        /// with computeMinimumCost false: no cheapest-adjacent-claim cost math.
+        /// with computeMinimumCost false: no cheapest-adjacent-claim cost math. The army gates
+        /// run once per refresh, not per tile, so they keep the per-call GateArguments marshal.
         /// </summary>
         public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
         {
@@ -637,20 +862,18 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// The gate calling conventions, as the game declares them: the flags argument is always
-        /// index 1 (army gates) or 2 (tile gates), and only the camp tile gate carries the settle
-        /// cost trio. Shapes are the same names the binding table matches overloads by.
+        /// The per-call army-gate marshals, as the game declares them: the flags argument is
+        /// always index 1, and only the camp army gate carries the settle cost trio. Shapes are
+        /// the same names the binding table matches overloads by; the tile gates run startup-
+        /// compiled delegates with the same shapes and carry no argument array.
         /// </summary>
         private static object[] GateArguments(string shape, object army, int tileIndex, ArmyActionFailureFlags failures, FixedPoint moneyCost, FixedPoint influenceCost, FixedPoint unitCost)
         {
             switch (shape)
             {
-                case "campTile": return new object[] { army, tileIndex, failures, moneyCost, influenceCost, unitCost };
-                case "positionFlags": return new object[] { army, PositionForTile(tileIndex), failures };
-                case "tileFlags": return new object[] { army, tileIndex, failures };
                 case "campArmy": return new object[] { army, failures, moneyCost, influenceCost, unitCost, false };
                 case "armyFlags": return new object[] { army, failures };
-                default: return null;
+                default: return null; // tile shapes run compiled delegates: no argument array
             }
         }
 
@@ -681,6 +904,17 @@ namespace SettlementPlacementAdvisor
         {
             MethodInfo method;
             return s_Methods.TryGetValue(label, out method) ? method : null;
+        }
+
+        /// <summary>
+        /// The startup-compiled delegate of a hot label. Null means the name was never bound:
+        /// Resolve compiles every hot member and refuses ready when one cannot compile, so this
+        /// is the unreachable safety net, not a degraded reflection path.
+        /// </summary>
+        private static Delegate GetCompiled(string label)
+        {
+            Delegate compiled;
+            return s_Compiled.TryGetValue(label, out compiled) ? compiled : null;
         }
 
         /// <summary>
@@ -804,14 +1038,6 @@ namespace SettlementPlacementAdvisor
             var empire = empires.GetValue(empireIndex);
             if (empire == null) return 0;
             return GetIntMember(empire, EmpireVisionBits);
-        }
-
-        /// <summary>WorldPosition for a tile index, as the FoundCity position gate takes it.</summary>
-        private static object PositionForTile(int tileIndex)
-        {
-            var toPosition = Method(TileToPosition);
-            var offset = toPosition.Invoke(null, new object[] { tileIndex });
-            return Activator.CreateInstance(toPosition.DeclaringType, offset);
         }
 
         private static int GetIntMember(object target, string label)
