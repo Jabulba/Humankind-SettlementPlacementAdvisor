@@ -15,19 +15,27 @@ the domain and the modules at its seams.
 - **Refresh**: one pass of the placement snapshot sync: vanilla full eval (only at
   activation / district change) and `UpdateCurrentPosition` (every mouse move). The advisor
   hooks `UpdateCurrentPosition`, so a refresh means "the cursor position was processed".
-- **Hovered territory**: the territory owning the tile under the placement cursor. Level 1
-  of the range.
-- **Range territories**: territories reachable from the hovered territory in the
-  adjacency range (`RangeLevels`, center counts as 1), stepping over LAND edges only:
-  the game's territory adjacency array also carries sea, cliff, mountain and closed
-  edges, and those never count as a range step. The hovered territory is never a range
-  territory.
+- **Hovered territory**: the territory owning the tile under the placement cursor. Center of
+  the placement neighborhood (level 1), and the only territory scanned when the game's
+  adjacency data is unavailable.
+- **Placement neighborhood**: the hovered territory plus the territories reachable from it in
+  the adjacency range (`RangeLevels`, center counts as 1), stepping over adjacency edges of
+  any type. Adjacency is the game's full adjacency relation; `TerritoryTransition` types
+  (coast, shallow/deep water, cliff, mountain, closed) are an AI-layer mobility overlay and
+  never filter it.
+- **Claimable territory**: a neighborhood territory the placing army may settle under the
+  session's placement mode: the territory-level facts (world edge, existing settlement,
+  mode-specific settlement ownership) pass, evaluated before any tile work.
+- **Scan pass**: one evaluation of the placement neighborhood's tiles on the simulation
+  thread: claimability filter, per-tile validity, per-tile scoring, per-territory ranking.
+- **Top tie set**: the picks a territory publishes: its admitted count, plus every additional
+  tile tied in score with the last admitted tile.
 - **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
   placement data the FIMS pins read.
 - **Cursor context**: the pick computation's full input for one refresh: hovered
-  territory, placing army and empire, and the advised counts (clamping lives inside the
-  pick computation, minimum 1). Context in, picks out: a null return means the game
-  facts were unavailable and the advisor deactivates.
+  territory, placing army, empire, placement mode, and the advised counts (clamping lives
+  inside the pick computation, minimum 1). Context in, picks out: a null return means the
+  game facts were unavailable and the advisor deactivates.
 - **Pick set**: the published, immutable result of one pick computation: version, tiles
   (ascending, unique), tile membership, and the entering/leaving diff against the previous
   pick set. The only channel from the simulation thread to the presentation thread.
@@ -49,17 +57,19 @@ the domain and the modules at its seams.
 ## Modules
 
 - **Pick computation** (`PickComputation`): the rules. Cursor context + game surface in,
-  ordered unique picks out (null = game facts unavailable). Owns the per-territory frame
-  cache (frames read from the game surface at compute time, never threaded by callers),
-  the evaluation budget, count clamping, ranking, and truncation. No side effects.
+  ordered unique picks out (null = game facts unavailable). Owns the placement neighborhood
+  walk, the per-territory frame cache (frames read from the game surface at compute time,
+  never threaded by callers), count clamping, and per-territory ranking with ties. No side
+  effects.
 - **Game surface** (`GameSurface`): the seam over the game's internals: tile
   settlement capability, per-tile water, exploration, per-tile placement evaluation, frame
   counters, army lookup, and the territory graph (territory of a tile, claimed flag,
-  settlement-site tiles, land adjacencies). The adapter (`GameApi`) satisfies it in the game:
-  reflection for the simulation internals, the public AI snapshot for the territory graph (its
-  land filter keeps the `Open` transition edges). Water is a per-tile fact: sea-flagged
-  territories can host valid camp sites, so the advisor never filters by the territory ocean
-  flag. Territory facts fail closed: an unknown territory never advises.
+  settlement-site tiles, adjacencies). The adapter (`GameApi`) satisfies it in the game:
+  reflection for the simulation internals, the public AI snapshot for the territory graph
+  (adjacency is taken with no transition filter: transitions are a mobility overlay, not
+  adjacency). Water is a per-tile fact: sea-flagged territories can host valid camp sites, so
+  the advisor never filters by the territory ocean flag. Territory facts fail closed: an
+  unknown territory never advises.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
   evaluation. Writes pick slots in place, barriers, then raises `ValidTileCount`; owns
   `CurrentPositionIndex` when the cursor tile is a pick. Reserves tail capacity at
