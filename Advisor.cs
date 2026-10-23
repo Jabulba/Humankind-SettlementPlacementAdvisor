@@ -44,7 +44,8 @@ namespace SettlementPlacementAdvisor
         /// <summary>
         /// Scan-pass entry, at the EvaluatePlacement takeover (SPEC section 1): the pass that fills
         /// the per-territory cache and publishes the admission set for the cursor territory. It
-        /// writes no evaluation - the write belongs to the refresh, which serves from the cache.
+        /// writes no evaluation - the write belongs to the refresh, which serves from the cache - so
+        /// it publishes no cursor-slot failure of its own: the hover path supplies that fact.
         /// </summary>
         public void RunScanPass(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
@@ -54,45 +55,51 @@ namespace SettlementPlacementAdvisor
             {
                 // The scan pass writes nothing, so there is no tail to clear: an activation that
                 // found nothing leaves the vanilla evaluation exactly as vanilla left it.
-                Deactivate();
+                Deactivate(evaluation.SettleType);
                 return;
             }
-            Publish(picks);
+            Publish(picks, evaluation.SettleType, ArmyActionFailureFlags.None);
         }
 
         /// <summary>
-        /// Per-refresh entry (the UpdateCurrentPosition takeover): the cursor slot plus the admission
-        /// set. The advisor writes the cursor slot itself from the mode gate call with no mask, so
-        /// the failure flags and the three instant costs reach the camp mouse marker and the
-        /// hovered-pin rule, and the cursor index points at that slot. A zero-pick result publishes
-        /// INACTIVE, which displays nothing: stars cleared, no cursor entry, no pick entries, no pin,
-        /// and no vanilla surface taking the advice's place - and it takes the advisor's tail
-        /// contribution with it.
+        /// Per-refresh entry (SPEC section 1 row 4, SPEC section 5 row 5): the cursor slot plus the
+        /// admission set. The advisor writes the cursor slot itself from the mode gate call with no
+        /// mask, so the failure flags and the three instant costs reach the camp mouse marker and the
+        /// hovered-pin rule, and the cursor index points at that slot: the cursor-slot facts vanilla's
+        /// own refresh body produces are produced here, with the mode's gate in place of the
+        /// camp-only one. A zero-pick result publishes INACTIVE, which displays nothing: stars
+        /// cleared, no cursor entry, no pick entries, no pin, and no vanilla surface taking the
+        /// advice's place - and it takes the advisor's tail contribution with it.
         /// </summary>
         public void Run(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
             object army;
             var picks = Compute(out var outcome, out army, evaluation, cursorTile, armyGuid);
+            var mode = evaluation.SettleType;
             switch (outcome)
             {
                 case Outcome.Picks:
-                    m_Writer.Write(evaluation, picks, CursorSlotFacts(evaluation, army, cursorTile));
-                    Publish(picks);
+                {
+                    var cursor = CursorSlotFacts(evaluation, army, cursorTile);
+                    m_Writer.Write(evaluation, picks, cursor);
+                    Publish(picks, mode, cursor.Failure);
                     break;
+                }
                 case Outcome.NoPicks:
                     PublishEmpty(evaluation); // no cursor entry, no glyphs, no pick entries, no pins
                     break;
                 default:
-                    Deactivate(); // vanilla's mode: its entries, its cursor entry, its glyphs stay
+                    Deactivate(mode); // vanilla's mode: its entries, its cursor entry, its glyphs stay
                     break;
             }
         }
 
         /// <summary>
-        /// The refresh decision the takeover patch asks. In a wired mode with an answering surface
-        /// the advisor owns the cursor slot, so vanilla's whole refresh body - the append-one-tile
-        /// hover rule with its resize-by-10 included - is skipped. Anywhere else vanilla keeps
-        /// running its own refresh, its own cursor entry included, and nothing is double-written.
+        /// The refresh decision the takeover patch asks (SPEC section 1 row 4): in a wired mode with
+        /// an answering surface the advisor owns the cursor slot, so vanilla's hover append rule and
+        /// its resize-by-10 die with the body that housed them and nothing lands above the reserved
+        /// window. Anywhere else vanilla keeps running its own refresh, its own cursor entry
+        /// included, and nothing is double-written.
         /// </summary>
         public bool OwnsRefresh(CampPlacementEvaluation evaluation)
         {
@@ -184,21 +191,28 @@ namespace SettlementPlacementAdvisor
             outcome = picks == null || picks.Length == 0 ? Outcome.NoPicks : Outcome.Picks;
             return picks;
         }
-        private static void Publish(Pick[] picks)
+
+        /// <summary>
+        /// Publish the admission set through the single presentation channel: the pick content, the
+        /// mode it was published for, and the cursor slot's unmasked gate answer, in one atomic
+        /// swap. Tiles ascend because the pick merge sorts them ascending.
+        /// </summary>
+        private static void Publish(Pick[] picks, ArmyActionType mode, ArmyActionFailureFlags settleFailure)
         {
             var tiles = new int[picks.Length];
             for (int i = 0; i < picks.Length; i++)
                 tiles[i] = picks[i].Tile;
-            PickSet.Publish(tiles);
+            PresentationView.Publish(tiles, mode, settleFailure);
         }
 
         /// <summary>
-        /// Publish an inactive pick set without touching the evaluation. Republishing an inactive
-        /// set is a no-op, so a mode exit costs no version churn per refresh.
+        /// Publish the inactive view for `mode` without touching the evaluation. Republishing an
+        /// inactive view is a no-op, so a session that advises nothing costs no version churn per
+        /// refresh.
         /// </summary>
-        public void Deactivate()
+        public void Deactivate(ArmyActionType mode)
         {
-            PickSet.Publish(null);
+            PresentationView.PublishInactive(mode);
         }
 
         /// <summary>
@@ -207,7 +221,7 @@ namespace SettlementPlacementAdvisor
         public void PublishEmpty(CampPlacementEvaluation evaluation)
         {
             m_Writer.ClearTail(evaluation);
-            Deactivate();
+            Deactivate(evaluation.SettleType);
         }
     }
 }

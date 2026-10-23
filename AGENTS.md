@@ -44,10 +44,11 @@ Scripts assume the SDK at `~/.dotnet` and set `DOTNET_ROOT`/`PATH` themselves.
 
 ## Architecture map
 
-Simulation thread: `Patches.cs` → `Advisor` → `PickComputation` → `EvaluationWriter` →
-`PickSet`. Presentation thread: `StarRenderer` and the FIMS-pin postfix read the captured
-`PickSet`. `Plugin.cs` is composition plus the load gate (`LoadGate`); `GameSurface` is the rules'
-seam and `GameApi` its reflection adapter.
+Simulation thread: `Patches.cs` → `Advisor` → `PickComputation` → `EvaluationWriter`; the scan
+publishes to the presentation channel. Presentation thread: `StarRenderer` and the FIMS-pin
+postfix read only the published `PresentationView`. `Plugin.cs` is composition plus the load gate
+(`LoadGate`); `GameSurface` is the rules' seam, `GameApi` its reflection adapter, and the
+mode-policy table in `PickComputation` is the single source of mode dispatch.
 
 - **Writes happen only through the active mode's advisor pipeline, into that mode's evaluation.**
   The mode-policy table wires `CreateCamp`, `FoundCity` and `FoundCityWithSettler`; the three modes
@@ -58,9 +59,10 @@ seam and `GameApi` its reflection adapter.
   never move vanilla entries, never sweep the array, and zero only the slots a refresh releases. A
   settlement tail left after a mode switch must be scrubbed over the whole region ever reserved, not
   merely counted down.
-- `PickSet.Current` is the only cross-thread channel: immutable, volatile, version-gated, with
-  entering/leaving diffs. Do not add other shared mutable state or touch Unity objects on the
-  simulation thread.
+- `PresentationView.Current` is the only cross-thread channel: one volatile reference swap carrying
+  the pick set (version-gated, with entering/leaving diffs), the mode it was published for, and the
+  cursor slot's gate answer. Presentation code reads only that captured view. Do not add other
+  shared mutable state or touch Unity objects on the simulation thread.
 - `GameApi.Resolve()` checks reflected member names at startup and `LoadGate` makes an unresolved
   name a hard, loud load failure: the failure list is logged and the game closes. If the log says
   `Load failure, unresolved game members`, the game build drifted: decompile and update those

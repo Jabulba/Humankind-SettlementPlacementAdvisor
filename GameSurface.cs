@@ -63,10 +63,11 @@ namespace SettlementPlacementAdvisor
         int GetArmyEmpireIndex(object army);
 
         /// <summary>
-        /// The district definition the given placement mode evaluates with (CampDefinition for
-        /// CreateCamp, CityCenterDefinition for both city modes). False for a mode the surface
-        /// does not map. The settler's starting pack is deliberately absent: the vanilla
-        /// evaluator never reads it, so it never reaches scoring.
+        /// The district definition the given placement mode evaluates with: the definition the
+        /// mode's row in the mode-policy table names (CampDefinition for CreateCamp,
+        /// CityCenterDefinition for both city modes). False for a mode with no row. The settler's
+        /// starting pack is deliberately absent: the vanilla evaluator never reads it, so it never
+        /// reaches scoring.
         /// </summary>
         bool TryGetDistrictDefinition(ArmyActionType mode, out object districtDefinition);
 
@@ -129,24 +130,28 @@ namespace SettlementPlacementAdvisor
         /// order, ALL of them - sea, cliff, mountain and closed-border edges included, with no
         /// transition filter. The placement-neighborhood scan steps over every edge it reports.
         /// False is the distinct no-answer outcome (unknown adjacency), never a territory that
-        /// reports no edges: the scan degrades to the territories it has already reached and
-        /// logs the failure. Snapshot view: read-only, valid for the current refresh.
+        /// reports no edges: the scan degrades to the hovered territory's admission set alone and
+        /// logs the failure (SPEC section 2 step 3). Snapshot view: read-only, valid for the
+        /// current refresh.
         /// </summary>
         bool TryGetAdjacentTerritories(int territoryIndex, out SnapshotTerritory.Adjacency[] edges);
 
         /// <summary>
-        /// The mode's tile gate (sim thread, one reflection call per tile): the settle-cost body
-        /// stays intact. maskMoneyAndInfluence applies the membership mask
-        /// (GameApi.ApplyMoneyInfluenceMask); the unmasked form keeps the money/influence
-        /// failures, which is what the cursor slot writes. False when the gate cannot be
-        /// answered (unmapped mode, missing army, reflection failure).
+        /// The mode's tile gate, as the mode-policy row names it (sim thread, one reflection call
+        /// per tile): the row declares the gate member and its calling convention, and the surface
+        /// marshals that shape - the settle-cost body stays intact. maskMoneyAndInfluence applies
+        /// the membership mask (GameApi.ApplyMoneyInfluenceMask); the unmasked form keeps the
+        /// money/influence failures, which is what the cursor slot writes. False when the gate
+        /// cannot be answered (no row for the mode, missing army, reflection failure).
         /// </summary>
         bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence, out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost);
 
         /// <summary>
-        /// The mode's army-level action gate (army overload, computeMinimumCost false): the
-        /// facts about the army itself, no target tile, no cheapest-claim cost math.
-        /// False when the gate cannot be answered.
+        /// The mode's army-level gate: every army gate the mode-policy row names, in its order,
+        /// accumulating one flag set - the shared army-state rows (decoy ActionProhibited,
+        /// ArmyLockedByBattle, ArmyLocked) first, then the mode's own army rows, which is what
+        /// vanilla's own gates assemble. No target tile, no cheapest-claim cost math. False when
+        /// the gate cannot be answered.
         /// </summary>
         bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures);
     }

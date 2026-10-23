@@ -47,19 +47,100 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// The mode-policy table (SPEC section 3): which mode the pipeline runs, the territory filter
-    /// that mode evaluates, and the district definition and gates its row names. A mode the table
+    /// One row of the mode-policy table (SPEC section 3): the mode, the district definition it
+    /// scores with, the tile gate it asks, and the army gates it asks before any tile, all named by
+    /// the GameApi member labels the startup probe binds, each with its calling convention. This
+    /// table is the single source: GameApi dispatches gates and definitions off it and holds no
+    /// mode switch of its own.
+    /// </summary>
+    internal struct ModeRow
+    {
+        public ArmyActionType Mode;
+        public string DefinitionLabel;
+        public string TileGateLabel;
+        public string TileGateShape;
+        public string[] ArmyGateLabels;  // call order: the shared army-state rows first
+        public string[] ArmyGateShapes;  // one shape per label, same indexes
+    }
+
+    /// <summary>
+    /// The mode-policy table (SPEC section 3): which modes the pipeline runs, and per mode its
+    /// territory filter, its district definition, its tile gate and its army gates. A mode the table
     /// has not wired fails closed: the advisor advises nothing and vanilla stays in charge.
     /// </summary>
     internal static class ModePolicy
     {
-        /// <summary>The wired rows of the table: settlement placement, city founding, and settler
-        /// city founding. Anything unmapped fails closed.</summary>
+        /// <summary>The game member names this table's rows name. They live here, in the mode-policy
+        /// table, and GameApi's startup-bound member table binds exactly these names, so a row can
+        /// only name a member the startup probe checked (AGENTS: an unresolved name is a load
+        /// failure).</summary>
+        public const string CampDefinitionLabel = "DepartmentOfTheInterior.CampDefinition";
+        public const string CityCenterDefinitionLabel = "DepartmentOfTheInterior.CityCenterDefinition";
+        public const string CommonArmyGateLabel = "ArmyActionHelper.FillCommonArmyFailures(army)";
+        public const string CampTileGateLabel = "ArmyActionHelper.FillCreateCampFailures(tile)";
+        public const string CampArmyGateLabel = "ArmyActionHelper.FillCreateCampFailures(army)";
+        public const string FoundCityTileGateLabel = "ArmyActionHelper.FillFoundCityFailures(position)";
+        public const string FoundCityArmyGateLabel = "ArmyActionHelper.FillFoundCityFailures(army)";
+        public const string SettlerTileGateLabel = "ArmyActionHelper.FillSettlerAbilityFailures(tile)";
+        public const string SettlerArmyGateLabel = "ArmyActionHelper.FillSettlerAbilityFailures(army)";
+
+        /// <summary>
+        /// The wired rows: settlement placement, city founding, and settler city founding. Each
+        /// army-gate list starts with the shared army-state rows (ArmyActionHelper.cs:365-378:
+        /// decoy ActionProhibited, ArmyLockedByBattle, ArmyLocked) because the camp and settler
+        /// army overloads do not run them and the city row runs them twice harmlessly (flags
+        /// accumulate). Anything unmapped has no row.
+        /// </summary>
+        private static readonly ModeRow[] s_Rows = new ModeRow[]
+        {
+            new ModeRow
+            {
+                Mode = ArmyActionType.CreateCamp,
+                DefinitionLabel = CampDefinitionLabel,
+                TileGateLabel = CampTileGateLabel,
+                TileGateShape = "campTile",
+                ArmyGateLabels = new string[] { CommonArmyGateLabel, CampArmyGateLabel },
+                ArmyGateShapes = new string[] { "armyFlags", "campArmy" },
+            },
+            new ModeRow
+            {
+                Mode = ArmyActionType.FoundCity,
+                DefinitionLabel = CityCenterDefinitionLabel,
+                TileGateLabel = FoundCityTileGateLabel,
+                TileGateShape = "positionFlags",
+                ArmyGateLabels = new string[] { CommonArmyGateLabel, FoundCityArmyGateLabel },
+                ArmyGateShapes = new string[] { "armyFlags", "armyFlags" },
+            },
+            new ModeRow
+            {
+                Mode = ArmyActionType.FoundCityWithSettler,
+                DefinitionLabel = CityCenterDefinitionLabel,
+                TileGateLabel = SettlerTileGateLabel,
+                TileGateShape = "tileFlags",
+                ArmyGateLabels = new string[] { CommonArmyGateLabel, SettlerArmyGateLabel },
+                ArmyGateShapes = new string[] { "armyFlags", "armyFlags" },
+            },
+        };
+
+        /// <summary>A mode the table has a row for is a mode the pipeline runs for.</summary>
         public static bool IsWired(ArmyActionType mode)
         {
-            return mode == ArmyActionType.CreateCamp
-                || mode == ArmyActionType.FoundCity
-                || mode == ArmyActionType.FoundCityWithSettler;
+            ModeRow row;
+            return TryGetRow(mode, out row);
+        }
+
+        /// <summary>The mode's row, the one lookup every gate, definition and filter dispatch
+        /// goes through. False for a mode the table has not wired.</summary>
+        public static bool TryGetRow(ArmyActionType mode, out ModeRow row)
+        {
+            for (int i = 0; i < s_Rows.Length; i++)
+            {
+                if (s_Rows[i].Mode != mode) continue;
+                row = s_Rows[i];
+                return true;
+            }
+            row = default(ModeRow);
+            return false;
         }
 
         /// <summary>
@@ -100,12 +181,12 @@ namespace SettlementPlacementAdvisor
     /// the vanilla weight table with the resource-tile exclusion kept, and admission as the clamped
     /// quota plus the full top tie set.
     ///
-    /// The placement neighborhood is the hovered territory (level 1) plus RangeLevels hops over
-    /// every adjacency edge the placement-neighborhood relation reports: sea, cliff, mountain and
-    /// closed-border edges each count as a hop, with no transition filter, no reachability, no
-    /// movement points, no zone of control, no cap, no budget and no truncation. Unknown
-    /// adjacency degrades the pass to the territories it has already reached and logs the surface
-    /// failure. The per-territory cache is keyed by territory, top count, empire, placement mode,
+    /// The placement neighborhood is the hovered territory (level 1) plus RangeLevels - 1 expansions
+    /// beyond it, each stepping over every adjacency edge the placement-neighborhood relation
+    /// reports: sea, cliff, mountain and closed-border edges each count as a hop, with no transition
+    /// filter, no reachability, no movement points, no zone of control, no cap, no budget and no
+    /// truncation. Unknown adjacency degrades the pass to the hovered territory's admission set
+    /// alone and logs the surface failure. The per-territory cache is keyed by territory, top count,
     /// the frames read here (the world claim frame included), and the territory's own claim stamp:
     /// a claim-frame bump recomputes only the territory whose claim facts moved, and a mouse move
     /// costs cache hits plus the territories newly entering the neighborhood. Callers never thread
@@ -191,10 +272,18 @@ namespace SettlementPlacementAdvisor
             if (armyFailures != ArmyActionFailureFlags.None)
                 return new Pick[0];
 
+            var hoveredPicks = GetTerritoryPicks(context.HoveredTerritory, context.TopHovered, pass);
             m_Merged.Clear();
             m_SeenTiles.Clear();
-            AddUnique(GetTerritoryPicks(context.HoveredTerritory, context.TopHovered, pass));
-            AddNeighbourhood(pass);
+            AddUnique(hoveredPicks);
+            if (AddNeighbourhood(pass))
+            {
+                // SPEC section 2 step 3: an unknown adjacency degrades the pass to hovered-only,
+                // so every territory reached at level 2 or deeper drops out of the published set.
+                m_Merged.Clear();
+                m_SeenTiles.Clear();
+                AddUnique(hoveredPicks);
+            }
 
             var picks = m_Merged.ToArray();
             Array.Sort(picks, (a, b) => a.Tile.CompareTo(b.Tile));
@@ -207,10 +296,11 @@ namespace SettlementPlacementAdvisor
         /// Every edge counts as a hop - sea, cliff, mountain and closed-border included - and
         /// every territory reached contributes its own admission set at the neighbour quota,
         /// served by the per-territory cache: a mouse move costs cache hits plus the territories
-        /// newly entering the neighborhood. A territory whose edges the surface cannot answer
-        /// degrades the pass to what it has already reached and logs the failure.
+        /// newly entering the neighborhood. Any territory whose edges the surface cannot answer
+        /// degrades the whole pass to the hovered territory's admission set alone (SPEC section 2
+        /// step 3), logs the surface failure, and returns true.
         /// </summary>
-        private void AddNeighbourhood(Pass pass)
+        private bool AddNeighbourhood(Pass pass)
         {
             m_Visited.Clear();
             m_Visited.Add(pass.Context.HoveredTerritory);
@@ -226,7 +316,7 @@ namespace SettlementPlacementAdvisor
                     if (!m_Game.TryGetAdjacentTerritories(m_Frontier[i], out edges))
                     {
                         GameApi.Fail("placement-neighborhood adjacency: territory " + m_Frontier[i]);
-                        continue; // unknown edges: no hops from this territory
+                        return true; // unknown edges: the whole pass degrades to hovered-only
                     }
                     for (int e = 0; e < edges.Length; e++)
                     {
@@ -240,6 +330,8 @@ namespace SettlementPlacementAdvisor
                 m_Frontier = m_NextFrontier;
                 m_NextFrontier = walked;
             }
+
+            return false; // every frontier answered its edges: the full neighborhood stands
         }
 
         private void AddUnique(Pick[] picks)

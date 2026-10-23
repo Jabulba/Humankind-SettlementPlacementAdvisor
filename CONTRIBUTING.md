@@ -33,7 +33,7 @@ revert of a prior commit, subject `revert: "<original subject>"`.
 | `gameapi` | `GameSurface.cs`, `GameApi.cs` |
 | `evaluation` | `EvaluationWriter.cs` |
 | `stars` | `StarRenderer.cs` |
-| `harness` | `scripts/test-range.sh`, `scripts/rangecircuit/` |
+| `harness` | `scripts/test-range.sh`, `scripts/rangecircuit/`, `scripts/test-noop.sh`, `scripts/noopcircuit/`, `scripts/test-scan.sh`, `scripts/scancircuit/` |
 
 Scopeless: `Plugin.cs` (composition root), docs, `LICENSE`, `.gitignore`,
 build plumbing. When a commit touches several scopes, use the dominant one
@@ -71,10 +71,13 @@ Authentication: `GAMELIBS_PAT` env var (interpolated in `nuget.config`).
   needs minutes to propagate after a publish, so a CI restore right after one can
   fail with NU1102: rerun the workflow, do not republish.
 - Game update: repack with `scripts/publish-gamelibs.sh <game-build-number>` using a
-  PAT with `write:packages`, then bump the exact pins in all four csproj files.
+  PAT with `write:packages`, then bump the exact pins in all five pinning csproj
+  files (`SettlementPlacementAdvisor.csproj` and the `cfggen`, `noopcircuit`,
+  `rangecircuit`, `scancircuit` projects under `scripts/`).
 
 Push CI (`.github/workflows/push.yml`): commit-message lint over the pushed range,
-Release build, `scripts/test-range.sh`.
+Release build, and all three harnesses (`scripts/test-range.sh`,
+`scripts/test-noop.sh`, `scripts/test-scan.sh`).
 
 
 ## Versioning and releases

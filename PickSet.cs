@@ -1,22 +1,27 @@
 using System;
+using System.Threading;
+using Amplitude.Mercury.Data.Simulation; // ArmyActionType
+using Amplitude.Mercury.Interop; // ArmyActionFailureFlags (the cursor-slot answer)
 
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Immutable snapshot of the advisor's selected tiles, with the entering/leaving diff
-    /// against the previous snapshot. The only cross-thread channel: built on the simulation
-    /// thread, read by the star renderer and pin gate on the presentation thread. Readers
-    /// capture PickSet.Current once per pass and answer every membership question from it.
+    /// The immutable pick content of one publish: version, tiles (ascending, unique), and the
+    /// entering/leaving diff against the content it replaces. Built on the simulation thread and
+    /// read on the presentation thread through the captured presentation view, never mutated after
+    /// construction. It gains no fields (SPEC section 5 row 2): the mode and cursor-slot facts the
+    /// presentation side reads travel on the view, not here.
     /// </summary>
     internal sealed class PickSet
     {
-        /// <summary>Current published pick set; null = advisor inactive. Volatile: single-word swap.</summary>
-        public static volatile PickSet Current;
-
         public readonly int Version;
         public readonly int[] Tiles;      // ascending, unique; null = inactive
         public readonly int[] Entering;   // tiles in this pick set, absent from the previous one
         public readonly int[] Leaving;    // tiles in the previous pick set, absent from this one
+
+        // Monotonic publish version: every new content claims the next number, so the two
+        // publishers (the simulation-thread publish and the mode-exit swap) never share one.
+        private static int s_Version;
 
         private PickSet(int version, int[] tiles, int[] entering, int[] leaving)
         {
@@ -27,8 +32,8 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Membership in this snapshot (binary search). Never re-reads PickSet.Current, so a
-        /// captured instance cannot tear mid-pass.
+        /// Membership in this content (binary search). Answered on the captured instance, never on a
+        /// live channel, so a pass cannot tear mid-way.
         /// </summary>
         public bool Contains(int tileIndex)
         {
@@ -52,31 +57,23 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Publish ascending unique tiles, or null for inactive (simulation thread). A
-        /// content-identical republish is a no-op, so mouse movement inside a territory churns
-        /// no fx. The entering/leaving diff is computed here so no consumer recomputes it.
+        /// The pick content for one publish of ascending unique tiles, or null for inactive, diffed
+        /// against the content it replaces. A content-identical build returns `previous` itself, so
+        /// the view's identity check sees it and burns no version: a mouse move inside a territory
+        /// churns no fx. The diff is computed here so no consumer recomputes it.
         /// </summary>
-        public static void Publish(int[] tiles)
+        public static PickSet Build(int[] tiles, PickSet previous)
         {
-            var prev = Current;
-            if (tiles == null && (prev == null || prev.Tiles == null))
-                return; // already inactive: publishing nothing bumps nothing
-            if (prev != null && tiles != null && prev.Tiles != null && tiles.Length == prev.Tiles.Length && SameTiles(prev.Tiles, tiles))
-                return;
+            if (tiles == null && (previous == null || previous.Tiles == null))
+                return previous; // already inactive: publishing nothing builds nothing
+            if (previous != null && tiles != null && previous.Tiles != null
+                && tiles.Length == previous.Tiles.Length && SameTiles(previous.Tiles, tiles))
+                return previous;
 
-            int version = prev == null ? 1 : prev.Version + 1;
             int[] entering;
             int[] leaving;
-            Diff(prev == null ? null : prev.Tiles, tiles, out entering, out leaving);
-
-            Current = new PickSet(version, tiles, entering, leaving);
-
-            var plugin = Plugin.Instance;
-            if (plugin != null)
-                plugin.Log("publish v=" + version
-                    + " picks=" + (tiles == null ? 0 : tiles.Length)
-                    + " entering=" + entering.Length
-                    + " leaving=" + leaving.Length);
+            Diff(previous == null ? null : previous.Tiles, tiles, out entering, out leaving);
+            return new PickSet(Interlocked.Increment(ref s_Version), tiles, entering, leaving);
         }
 
         // Both inputs ascending unique (null = empty side); outputs ascending.
@@ -145,6 +142,92 @@ namespace SettlementPlacementAdvisor
                 if (a[i] != b[i])
                     return false;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// The advisor's single cross-thread channel: one immutable, volatile, version-gated snapshot of
+    /// everything the presentation thread is allowed to read - the published pick content, the
+    /// placement mode it was published for, and the cursor slot's gate answer (vanilla's hovered rule
+    /// input). The simulation thread publishes it as one volatile reference swap; the pin gate, the
+    /// star renderer and the mode-exit path capture it once per pass and answer every question from
+    /// the capture, so no presentation reader touches the live evaluation's mutable fields.
+    ///
+    /// Publishing is version-gated on the whole presentation content: identical content swaps
+    /// nothing, so a mouse move inside a territory churns no fx and an idempotent deactivation burns
+    /// no version. Mode exit is the one non-simulation publisher: it swaps the same channel to the
+    /// inactive content, which is a single volatile write, so it needs no lock.
+    /// </summary>
+    internal sealed class PresentationView
+    {
+        /// <summary>The published view. Boot state: INACTIVE under an unwired mode, so the pin gate
+        /// and the renderer stay vanilla's until the advisor publishes for a wired mode. Volatile:
+        /// readers capture one reference, so a publish never tears a pass mid-read.</summary>
+        public static volatile PresentationView Current = Boot;
+
+        private static PresentationView Boot
+        {
+            get { return new PresentationView(0, null, ArmyActionType.AttackArmy, ArmyActionFailureFlags.None); }
+        }
+
+        public readonly int Version;    // the pick-content version: the star-reconcile gate
+        public readonly PickSet Picks;  // immutable content; null, or Tiles null, = advisor inactive
+        public readonly ArmyActionType Mode;
+        public readonly ArmyActionFailureFlags SettleFailure; // the cursor slot's unmasked gate answer
+
+        private PresentationView(int version, PickSet picks, ArmyActionType mode, ArmyActionFailureFlags settleFailure)
+        {
+            Version = version;
+            Picks = picks;
+            Mode = mode;
+            SettleFailure = settleFailure;
+        }
+
+        /// <summary>The advisor owns this view: it published an active pick set.</summary>
+        public bool IsActive
+        {
+            get { return Picks != null && Picks.Tiles != null; }
+        }
+
+        /// <summary>Membership in the captured pick content.</summary>
+        public bool Contains(int tileIndex)
+        {
+            var picks = Picks;
+            return picks != null && picks.Contains(tileIndex);
+        }
+
+        /// <summary>
+        /// Publish ascending unique tiles (null for inactive) with the mode they were published for
+        /// and the cursor slot's gate answer: one atomic swap of the single channel. Identical
+        /// presentation content publishes nothing.
+        /// </summary>
+        public static void Publish(int[] tiles, ArmyActionType mode, ArmyActionFailureFlags settleFailure)
+        {
+            var current = Current;
+            var picks = PickSet.Build(tiles, current == null ? null : current.Picks);
+            var version = picks == null ? 0 : picks.Version;
+            if (current != null && current.Picks == picks && current.Version == version
+                && current.Mode == mode && current.SettleFailure == settleFailure)
+                return; // nothing a reader sees has changed: no swap, no version burned
+
+            Current = new PresentationView(version, picks, mode, settleFailure);
+
+            var plugin = Plugin.Instance;
+            if (plugin != null)
+                plugin.Log("publish v=" + version
+                    + " picks=" + (tiles == null ? 0 : tiles.Length)
+                    + " entering=" + (picks == null ? 0 : picks.Entering.Length)
+                    + " leaving=" + (picks == null ? 0 : picks.Leaving.Length));
+        }
+
+        /// <summary>
+        /// The advisor's deactivation: publish the inactive content for `mode` with no cursor-slot
+        /// failure. Displays nothing in a mode the table wires; a mode it does not wire keeps
+        /// vanilla's own surface.
+        /// </summary>
+        public static void PublishInactive(ArmyActionType mode)
+        {
+            Publish(null, mode, ArmyActionFailureFlags.None);
         }
     }
 }

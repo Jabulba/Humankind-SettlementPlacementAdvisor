@@ -45,6 +45,7 @@ internal sealed class GraphSurface : GameSurface
     public HashSet<int> ResourceTiles = new HashSet<int>();
     public Dictionary<int, int> ScoreByTile = new Dictionary<int, int>();
     public ArmyActionFailureFlags_Part1 ArmyGateFlags;
+    public bool ThrowAtTheGate; // a pipeline that throws mid-pass: the takeover's catch path
     public Dictionary<int, ArmyActionFailureFlags_Part1> TileGateFlags = new Dictionary<int, ArmyActionFailureFlags_Part1>();
     public int TileGateCalls;
     public int UnmaskedGateCalls; // the cursor slot asks unmasked: money and influence stay in
@@ -134,6 +135,7 @@ internal sealed class GraphSurface : GameSurface
     public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
     {
         ArmyGateModes += mode + " ";
+        if (ThrowAtTheGate) throw new InvalidOperationException("pipeline failure at the army gate");
         failures = (ArmyActionFailureFlags)ArmyGateFlags;
         return army != null;
     }
@@ -157,14 +159,26 @@ internal sealed class CountingCanvas : PickCanvas
 /// scrub on every activation, the incremental zero-fill, the slot stability, and the shown set.
 /// Checks compare a full signature of the mutable state before and after, catching any mutation,
 /// not just known ones. Camp placement, city founding and settler founding are the wired controls:
-/// tail reserved, picks written Showable, vanilla's own glyphs untouched, stars and
-/// the pin gate answering the published membership, the cursor slot from the mode gate call with no
-/// mask. A mode the mode-policy table has not wired is the one that writes nothing. The pin gate is
-/// driven through the real postfix, and vanilla's unpatched pin filter chain is driven directly.
+/// tail reserved, picks written Showable, vanilla's own glyphs untouched, stars and the pin gate
+/// answering the published membership, the cursor slot from the mode gate call with no mask. A mode
+/// the mode-policy table has not wired is the one that writes nothing. The pin gate is driven
+/// through the real postfix, and vanilla's unpatched pin filter chain is driven directly.
+/// Presentation facts are read off the published channel (PresentationView.Current) and driven
+/// through the real publish path - a refresh publishes the mode plus the hovered tile's unmasked
+/// tile-gate answer - never by stamping live game fields. The startup-bound name table is resolved
+/// and required before any production entry point runs, because the patch targets bind through it.
+/// Additional rows: the army-level gate answering the shared army-state rows (battle-locked, locked)
+/// before the mode's own, mode exit taking the channel with the cursor, and a pipeline throw never
+/// falling back to vanilla.
 /// </summary>
 internal static class Program
 {
     private static int s_Failures;
+    private static int s_Checks;
+
+    // The harness surface, reachable from the publish-path helper: a published fact is driven by
+    // refreshing a scripted gate answer, never by stamping a live game field.
+    private static GraphSurface s_Surface;
 
     // Hand-computed from the derivation SPEC section 6 row 1 documents: the neighborhood territory
     // budget (the hovered territory plus 8 fan-out territories per hop beyond level 1) times the
@@ -179,6 +193,7 @@ internal static class Program
     private static void Check(string name, bool ok)
     {
         Console.WriteLine("[noopc] " + (ok ? "OK   " : "FAIL ") + name + (ok ? "" : "  [set: " + DescribeSet() + "]"));
+        s_Checks++;
         if (!ok) s_Failures++;
     }
 
@@ -231,9 +246,9 @@ internal static class Program
 
     private static string DescribeSet()
     {
-        var set = PickSet.Current;
-        if (set == null) return "no set published";
-        if (set.Tiles == null) return "INACTIVE";
+        var view = PresentationView.Current;
+        var set = view.Picks;
+        if (set == null || set.Tiles == null) return "INACTIVE under " + view.Mode;
         var sb = new StringBuilder("tiles=");
         for (int i = 0; i < set.Tiles.Length; i++) sb.Append(set.Tiles[i]).Append(' ');
         return sb.ToString();
@@ -346,7 +361,16 @@ internal static class Program
 
     private static bool Inactive()
     {
-        return PickSet.Current == null || PickSet.Current.Tiles == null;
+        return !PresentationView.Current.IsActive;
+    }
+
+    /// <summary>The published pick content: the channel's tiles, empty while the channel is
+    /// inactive. Published facts come off the channel - the only source the pin gate and the star
+    /// renderer read - never off a harness-side copy of the pick set.</summary>
+    private static int[] PublishedTiles()
+    {
+        var picks = PresentationView.Current.Picks;
+        return picks == null || picks.Tiles == null ? new int[0] : picks.Tiles;
     }
 
     private static bool AscendingUnique(int[] tiles)
@@ -438,19 +462,17 @@ internal static class Program
     }
 
     /// <summary>
-    /// Stamp the placement mode the pin gate reads. In production the takeover stamps the mode
-    /// on the snapshot's own placement evaluation (SettlementPlacementCursorSnapshot.cs:43),
-    /// which is the same evaluation vanilla's gate reads, so the harness stamps the same field.
+    /// The published mode and the published cursor-slot failure, driven the way production produces
+    /// them: a refresh in the mode under test asks the mode's tile gate with no mask for the hovered
+    /// tile, writes the cursor slot, and publishes the mode, the admission set and that gate answer
+    /// on the presentation channel. The rows that used to stamp SettleType/SettleFailure on the
+    /// snapshot's own evaluation drive this instead: the pin gate reads the published facts, never
+    /// the live evaluation's.
     /// </summary>
-    private static void SetPresentationMode(ArmyActionType mode)
+    private static void PublishHovered(CampPlacementEvaluation eval, int hoveredTile)
     {
-        Snapshots.SettlementPlacementCursorSnapshot.PresentationData.PlacementEvaluation.SettleType = mode;
-    }
-
-    /// <summary>The cursor-slot gate result vanilla's hovered rule reads.</summary>
-    private static void SetPresentationFailure(ArmyActionFailureFlags failure)
-    {
-        Snapshots.SettlementPlacementCursorSnapshot.PresentationData.PlacementEvaluation.SettleFailure = failure;
+        s_Surface.DistrictFrame++; // cache-key bump: the published facts must come from this refresh
+        Refresh(eval, hoveredTile);
     }
 
     /// <summary>Membership answered independently of the mod: a plain scan of the published tiles.</summary>
@@ -527,6 +549,7 @@ internal static class Program
     private static int Main()
     {
         var surface = new GraphSurface();
+        s_Surface = surface;
         var plugin = new Plugin();
         plugin.Writer = new EvaluationWriter();
         var canvas = new CountingCanvas();
@@ -534,6 +557,40 @@ internal static class Program
         plugin.Advisor = new Advisor(surface, new PickComputation(surface), plugin.Writer, plugin.Stars);
         Plugin.Instance = plugin;
         const int baseline = 6;
+
+        // F2 (startup coverage, SPEC section 8 + section 1): every Harmony patch target the patch
+        // surface binds comes from the startup-bound name table, so the harness resolves that table
+        // exactly as the composition root does - and requires the resolved surface - before it drives
+        // a single production entry point.
+        // The startup probe binds by scanning the loaded assemblies; in the game every game assembly
+        // is loaded long before a plugin's Awake, so the probe sees the whole surface. The harness's
+        // own entry point touches only the simulation-side types, so the two presentation-side
+        // assemblies the patch surface binds are touched here first: the mod patches
+        // SettlementPlacementCursor.DeactivateCursor (presentation) and
+        // SettlementPlacementPinsSubset.PinMustMeShown (UI), and an assembly the probe has not loaded
+        // is a name it cannot resolve.
+        var patchHosts = new System.Reflection.Assembly[]
+        {
+            typeof(Amplitude.Mercury.Presentation.SettlementPlacementCursor).Assembly,
+            typeof(Amplitude.Mercury.UI.SettlementPlacementPinsSubset).Assembly,
+        };
+        var loadedAssemblies = System.AppDomain.CurrentDomain.GetAssemblies();
+        var patchHostsLoaded = true;
+        for (int i = 0; i < patchHosts.Length; i++)
+            patchHostsLoaded &= System.Array.IndexOf(loadedAssemblies, patchHosts[i]) >= 0;
+        Check("the assemblies the patch surface binds are loaded when the startup probe scans them",
+            patchHostsLoaded);
+        GameApi.Resolve();
+        if (!GameApi.ReadyStatic) Console.WriteLine("[noopc] resolve failed: " + GameApi.ResolveError);
+        Check("the startup probe resolves every required game member before the harness drives production",
+            GameApi.ReadyStatic);
+        var patchTargets = string.Join(" | ", GameApi.RequiredNames);
+        Check("every patch target the patch surface binds is a startup-checked name",
+            patchTargets.Contains("Patch.SettlementPlacementCursorSnapshot.EvaluatePlacement")
+            && patchTargets.Contains("Patch.CampPlacementEvaluation.UpdateCurrentPosition")
+            && patchTargets.Contains("CampPlacementEvaluation.Initialize(CustomTileIndexArea)")
+            && patchTargets.Contains("Patch.SettlementPlacementCursor.DeactivateCursor")
+            && patchTargets.Contains("Patch.SettlementPlacementPinsSubset.PinMustMeShown"));
 
         // A. A mode the mode-policy table has not wired stays vanilla's in every entry point: it
         // writes nothing and publishes nothing. The city no-op contract is retired (ticket 17): the
@@ -559,7 +616,7 @@ internal static class Program
             plugin.Writer.CursorSlotIndex(settlement) == baseline);
 
         Refresh(settlement, 131); // cursor tile inside the synthetic territory space (territory 3)
-        var tiles = PickSet.Current == null || PickSet.Current.Tiles == null ? new int[0] : PickSet.Current.Tiles;
+        var tiles = PublishedTiles();
         int inTail = 0;
         for (int i = baseline + 1; i < settlement.ValidTileCount; i++)
             for (int t = 0; t < tiles.Length; t++)
@@ -572,7 +629,7 @@ internal static class Program
             ShowableIsMembership(settlement, baseline, tiles));
         Check("CreateCamp refresh: vanilla's glyph flags are untouched",
             VanillaGlyphs(settlement, baseline) == settlementGlyphs);
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("settlement pick set starts one star per pick", canvas.Started == tiles.Length);
 
         // The tail slots the cursor hovers outside any pick: the refresh writes the cursor slot
@@ -587,8 +644,8 @@ internal static class Program
         surface.TileGateFlags[133] = ArmyActionFailureFlags_Part1.TileIsOccupied;
         surface.DistrictFrame++;
         Refresh(settlement, 131);
-        var shrunk = PickSet.Current.Tiles;
-        plugin.Stars.Render(PickSet.Current);
+        var shrunk = PublishedTiles();
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("a smaller pick set scrubs the slots it released",
             shrunk.Length < tiles.Length
             && ShowableIsMembership(settlement, baseline, shrunk)
@@ -597,53 +654,64 @@ internal static class Program
         surface.DistrictFrame++;
         Refresh(settlement, 131);
         Check("the restored pick set re-occupies its invariant slots",
-            ShowableIsMembership(settlement, baseline, PickSet.Current.Tiles));
-        plugin.Stars.Render(PickSet.Current);
+            ShowableIsMembership(settlement, baseline, PublishedTiles()));
+        plugin.Stars.Render(PresentationView.Current.Picks);
 
-        // C. Pin gate through the real postfix: published-set membership plus vanilla's hovered
-        // rule, answered from the mode the takeover stamps on the snapshot's own evaluation.
+        // C. Pin gate through the real postfix: published-set membership plus vanilla's hovered rule,
+        // every fact answered from the published channel - the mode the last refresh published, the
+        // active pick set, and the cursor-slot failure that refresh's unmasked gate call produced for
+        // the hovered tile (SPEC section 5 rows 2 and 5). The old rows stamped SettleType and
+        // SettleFailure on the snapshot's own evaluation; the fix moved both facts onto the channel.
         var snapshot = CreateSnapshot();
         int bestTile = 5001; // a vanilla best-2 tile: never an advisor pick (picks are 13x tiles)
         snapshot.PresentationData.PlacementEvaluation.BestCampPlacementTileIndexes = new[] { bestTile, -1 };
         Snapshots.SettlementPlacementCursorSnapshot = snapshot;
-        SetPresentationMode(ArmyActionType.CreateCamp);
-        SetPresentationFailure(ArmyActionFailureFlags.None);
 
-        int pickTile = tiles[0];
+        // The channel as the last camp refresh left it: mode CreateCamp, the restored admission set,
+        // and no cursor-slot failure - the hovered tile's unmasked gate call answered clean.
+        int pickTile = PublishedTiles().Length > 0 ? PublishedTiles()[0] : -1;
         Gate("camp: a member shows its pin", true, pickTile, true);
         Gate("camp: a member shows its pin with vanilla answering off", false, pickTile, true);
         Gate("camp: the vanilla best tile outside the set shows no pin", true, bestTile, false);
-        SetPresentationFailure((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughInfluence);
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughInfluence;
+        PublishHovered(settlement, 131); // publishes the mode with the hovered tile's unmasked answer
         Gate("camp: an influence-only cursor failure keeps the member pin", true, pickTile, true);
-        SetPresentationFailure((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughMoney);
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughMoney;
+        PublishHovered(settlement, 131);
         Gate("camp: a money cursor failure drops the member pin", true, pickTile, false);
-        SetPresentationFailure((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.ArmyLocked);
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.ArmyLocked;
+        PublishHovered(settlement, 131);
         Gate("camp: any other cursor failure drops the member pin", true, pickTile, false);
-        SetPresentationFailure(ArmyActionFailureFlags.None);
+        surface.TileGateFlags.Clear();
+        PublishHovered(settlement, 131);
 
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("settlement pick set re-render is version-gated (no fx churn)", canvas.Started == 0);
-        plugin.Advisor.Deactivate();
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Advisor.Deactivate(ArmyActionType.CreateCamp);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("deactivation stops every tracked star", canvas.Stopped == tiles.Length && canvas.Started == 0);
         Check("Deactivate publishes the Tiles==null inactive representation",
-            PickSet.Current != null && PickSet.Current.Tiles == null);
+            PresentationView.Current.Picks != null && PresentationView.Current.Picks.Tiles == null);
         Gate("camp INACTIVE: the vanilla best tile shows no pin", true, bestTile, false);
         Gate("camp INACTIVE: a former pick tile shows no pin", true, pickTile, false);
 
-        int deactivatedVersion = PickSet.Current.Version;
-        plugin.Advisor.Deactivate();
+        int deactivatedVersion = PresentationView.Current.Version;
+        plugin.Advisor.Deactivate(ArmyActionType.CreateCamp);
         Check("Deactivate is idempotent (no version churn per refresh)",
-            PickSet.Current.Version == deactivatedVersion && PickSet.Current.Tiles == null);
+            PresentationView.Current.Version == deactivatedVersion && PresentationView.Current.Picks.Tiles == null);
 
-        PickSet.Current = null;
-        Gate("camp before any publish: no pin shows", true, bestTile, false);
-        SetPresentationMode(ArmyActionType.Ransack); // a mode the table has not wired
+        // The fix changed this row's shape: the channel is never null - its pre-publish boot state is
+        // INACTIVE under a mode the table has not wired - so "no set published" is driven as the
+        // publish it replaces: INACTIVE under a wired mode, which shows no pin at all.
+        PresentationView.PublishInactive(ArmyActionType.CreateCamp);
+        Gate("camp with nothing published: no pin shows", true, bestTile, false);
+        Gate("camp with nothing published: a former member shows no pin", true, pickTile, false);
+        PresentationView.PublishInactive(ArmyActionType.Ransack); // the boot shape: INACTIVE, unwired mode
         Gate("a mode the table has not wired keeps a vanilla pin answer on", true, bestTile, true);
         Gate("a mode the table has not wired keeps a vanilla pin answer off", false, pickTile, false);
-        SetPresentationMode(ArmyActionType.CreateCamp);
+        // The mode the gate answers for follows the channel: the camp refresh below republishes it.
 
         // C2. Zero-pick publish (every neighborhood territory claimed/all-water): the advisor
         // publishes INACTIVE and displays nothing: stars cleared, no pick entries, and no
@@ -673,7 +741,7 @@ internal static class Program
         surface.DistrictFrame++;
         Refresh(settlement, 133);
         Check("sea-flagged territory with land tiles publishes picks",
-            !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+            !Inactive() && AscendingUnique(PublishedTiles()));
         Gate("sea-flagged territory: pick pins are forced", false, 132, true);
         surface.AllOcean = false;
         surface.DistrictFrame++;
@@ -706,8 +774,10 @@ internal static class Program
 
         int citySlot = plugin.Writer.CursorSlotIndex(city);
         snapshot.PresentationData.PlacementEvaluation = city;
-        SetPresentationMode(ArmyActionType.FoundCity);
-        SetPresentationFailure(ArmyActionFailureFlags.None);
+        // The published mode and the published cursor-slot failure come from the refresh below: the
+        // city refresh publishes FoundCity together with the hovered tile's unmasked gate answer (no
+        // flag scripted on it, so no failure). The pin gate reads those published facts, never this
+        // evaluation's own fields.
         surface.ScoreByTile[131] = 200;
         surface.TileGateCalls = 0;
         surface.TileGateModes = "";
@@ -716,7 +786,7 @@ internal static class Program
         canvas.Stopped = 0;
         Check("the advisor owns the city refresh: vanilla's whole hover body is skipped",
             !Refresh(city, 131));
-        var cityTiles = PickSet.Current.Tiles;
+        var cityTiles = PublishedTiles();
         Check("FoundCity refresh publishes ascending unique tiles", AscendingUnique(cityTiles));
         Check("FoundCity refresh writes every pick into its own tail slot",
             city.ValidTileCount > baseline + 1
@@ -734,10 +804,10 @@ internal static class Program
             city.CurrentPositionIndex == citySlot && city.ValidTiles[citySlot].TileIndex == 131
             && !city.ValidTiles[citySlot].Showable);
         Check("the city writes touch no other evaluation", Signature(settlement) == campUntouched);
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("the city pick set starts one star per pick", canvas.Started == cityTiles.Length);
         Check("city pins follow the published membership",
-            GateAnswer(cityTiles[0]) && GateAnswer(cityTiles[1]) && !GateAnswer(bestTile));
+            cityTiles.Length > 1 && GateAnswer(cityTiles[0]) && GateAnswer(cityTiles[1]) && !GateAnswer(bestTile));
         Check("every city advisor slot above the live count is zeroed",
             ZeroFilledAboveCount(city, city.ValidTileCount, city.ValidTiles.Length));
 
@@ -750,9 +820,9 @@ internal static class Program
         surface.TileGateInfluence[131] = (FixedPoint)25;
         surface.DistrictFrame++;
         Refresh(city, 130); // the cursor sits off the pick: nothing is on the hover yet
-        var unaffordable = PickSet.Current.Tiles;
+        var unaffordable = PublishedTiles();
         Check("an unaffordable city tile stays in the published set", ContainsTile(unaffordable, 131));
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("the unaffordable city pick keeps its star: no fx stopped, the same member set",
             canvas.Stopped == 0 && unaffordable.Length == cityTiles.Length);
         Check("the unaffordable city pick shows its pin", GateAnswer(131));
@@ -769,8 +839,8 @@ internal static class Program
             && city.CurrentPositionIndex == citySlot
             && city.ValidTiles[citySlot].TileIndex == 131);
         Check("the hovered unaffordable pick keeps its star and its membership",
-            PickSet.Current.Tiles.Length == cityStars
-            && ShowableIsMembership(city, baseline, PickSet.Current.Tiles));
+            PublishedTiles().Length == cityStars
+            && ShowableIsMembership(city, baseline, PublishedTiles()));
         Check("the hovered unaffordable pick loses its pin on vanilla's hovered rule", !GateAnswer(131));
 
         surface.TileGateFlags.Clear();
@@ -789,12 +859,12 @@ internal static class Program
         // vanilla surface taking the advice's place.
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         surface.AllWater = true;
         surface.DistrictFrame++;
         Refresh(city, 131);
         Check("city zero picks publish INACTIVE", Inactive());
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("city INACTIVE clears every tracked star",
             canvas.Stopped == cityStars && canvas.Started == 0);
         Check("city INACTIVE shows no pin and leaves no pick entry",
@@ -828,9 +898,9 @@ internal static class Program
             VanillaGlyphs(settlement, baseline) == settlementGlyphs);
         Refresh(settlement, 131); // the city session runs its own pipeline on the released evaluation
         Check("the city session on the shared evaluation publishes and writes its own admission set",
-            !Inactive() && AscendingUnique(PickSet.Current.Tiles)
-            && ScanTailHits(settlement, PickSet.Current.Tiles, baseline + 1) == PickSet.Current.Tiles.Length
-            && ShowableIsMembership(settlement, baseline, PickSet.Current.Tiles));
+            !Inactive() && AscendingUnique(PublishedTiles())
+            && ScanTailHits(settlement, PublishedTiles(), baseline + 1) == PublishedTiles().Length
+            && ShowableIsMembership(settlement, baseline, PublishedTiles()));
         settlement.SettleType = ArmyActionType.CreateCamp;
         settlement.ValidTileCount = baseline; // and back: a camp activation on the same evaluation
         plugin.Writer.NoteActivation(settlement);
@@ -865,8 +935,8 @@ internal static class Program
 
         int settlerSlot = plugin.Writer.CursorSlotIndex(settler);
         snapshot.PresentationData.PlacementEvaluation = settler;
-        SetPresentationMode(ArmyActionType.FoundCityWithSettler);
-        SetPresentationFailure(ArmyActionFailureFlags.None);
+        // As in the city block: the settler refresh below publishes the mode with the hovered tile's
+        // unmasked gate answer, which is the fact the pin gate's hovered rule reads.
         surface.HasSettlement = false; surface.SettlementOwner = -1; surface.SettlementIsCity = false;
         surface.ScoreByTile[131] = 200;
         surface.TileGateCalls = 0;
@@ -876,7 +946,7 @@ internal static class Program
         canvas.Stopped = 0;
         Check("the advisor owns the settler refresh: vanilla's whole hover body is skipped",
             !Refresh(settler, 131));
-        var settlerTiles = PickSet.Current.Tiles;
+        var settlerTiles = PublishedTiles();
         Check("Settler refresh publishes ascending unique tiles", AscendingUnique(settlerTiles));
         Check("Settler refresh writes every pick into its own tail slot",
             settler.ValidTileCount > baseline + 1
@@ -894,10 +964,10 @@ internal static class Program
             settler.CurrentPositionIndex == settlerSlot && settler.ValidTiles[settlerSlot].TileIndex == 131
             && !settler.ValidTiles[settlerSlot].Showable);
         Check("the settler writes touch no other evaluation", Signature(settlement) == campUntouched2);
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("the settler pick set starts one star per pick", canvas.Started == settlerTiles.Length);
         Check("settler pins follow the published membership",
-            GateAnswer(settlerTiles[0]) && GateAnswer(settlerTiles[1]) && !GateAnswer(bestTile));
+            settlerTiles.Length > 1 && GateAnswer(settlerTiles[0]) && GateAnswer(settlerTiles[1]) && !GateAnswer(bestTile));
         Check("every settler advisor slot above the live count is zeroed",
             ZeroFilledAboveCount(settler, settler.ValidTileCount, settler.ValidTiles.Length));
         int settlerStars = settlerTiles.Length;
@@ -911,7 +981,7 @@ internal static class Program
         surface.TileGateInfluence[131] = (FixedPoint)25;
         surface.DistrictFrame++;
         Refresh(settler, 130); // the cursor sits off the pick
-        var settlerUnaffordable = PickSet.Current.Tiles;
+        var settlerUnaffordable = PublishedTiles();
         Check("an unaffordable settler tile stays in the published set", ContainsTile(settlerUnaffordable, 131));
         Check("the unaffordable settler pick keeps its star: no fx stopped, the same member set",
             canvas.Stopped == 0 && settlerUnaffordable.Length == settlerStars);
@@ -944,7 +1014,7 @@ internal static class Program
         surface.DistrictFrame++;
         Refresh(settler, 131);
         Check("the empire's own camp/pre-camp settlement is admitted (replaceable)",
-            !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+            !Inactive() && AscendingUnique(PublishedTiles()));
         surface.SettlementOwner = 2; // another empire's settlement site
         surface.DistrictFrame++;
         Refresh(settler, 131);
@@ -956,22 +1026,22 @@ internal static class Program
         surface.HasSettlement = false; surface.SettlementOwner = -1; surface.SettlementIsCity = false;
         surface.DistrictFrame++;
         Refresh(settler, 131);
-        Check("a settlement-free territory is admitted again", !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+        Check("a settlement-free territory is admitted again", !Inactive() && AscendingUnique(PublishedTiles()));
 
         // An army with no settler unit (FillSettlerAbilityFailures sets DontHaveAbility) hits the
         // army gate: INACTIVE publishes nothing - no stars, no pins, no cursor-slot entry.
         canvas.Started = 0; canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current); // reconcile the tracked fx to the active set
-        int trackedSettlerStars = PickSet.Current.Tiles.Length;
+        plugin.Stars.Render(PresentationView.Current.Picks); // reconcile the tracked fx to the active set
+        int trackedSettlerStars = PublishedTiles().Length;
         surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.DontHaveAbility;
         surface.TileGateCalls = 0;
         Refresh(settler, 131);
         Check("no settler unit publishes INACTIVE", Inactive());
         canvas.Started = 0; canvas.Stopped = 0; // count only the INACTIVE reconcile
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("no settler unit clears every tracked star", canvas.Stopped == trackedSettlerStars && canvas.Started == 0);
         Check("no settler unit shows no pin and takes no vanilla fallback",
-            !GateAnswer(settlerTiles[0], true) && !GateAnswer(bestTile, true));
+            settlerTiles.Length > 0 && !GateAnswer(settlerTiles[0], true) && !GateAnswer(bestTile, true));
         Check("no settler unit asks no tile gate", surface.TileGateCalls == 0);
         Check("no settler unit leaves no cursor-slot entry: the cursor index points at nothing",
             settler.CurrentPositionIndex == -1 && settler.ValidTiles[settlerSlot].TileIndex == -1
@@ -981,22 +1051,23 @@ internal static class Program
         // INACTIVE in a settler mode (zero picks: every tile water) displays nothing.
         canvas.Started = 0; canvas.Stopped = 0;
         Refresh(settler, 131); // re-publish the admitted set: army gate clean, settlement-free
-        plugin.Stars.Render(PickSet.Current); // reconcile the tracked fx to the admitted set
-        int trackedBeforeZero = PickSet.Current.Tiles.Length;
+        plugin.Stars.Render(PresentationView.Current.Picks); // reconcile the tracked fx to the admitted set
+        int trackedBeforeZero = PublishedTiles().Length;
         surface.AllWater = true;
         surface.DistrictFrame++;
         Refresh(settler, 131);
         Check("settler zero picks publish INACTIVE", Inactive());
         canvas.Started = 0; canvas.Stopped = 0; // count only the INACTIVE reconcile
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("settler INACTIVE clears every tracked star",
             canvas.Stopped == trackedBeforeZero && canvas.Started == 0);
         Check("settler INACTIVE shows no pin and leaves no pick entry",
-            !GateAnswer(settlerTiles[0], true) && !GateAnswer(bestTile, true)
+            settlerTiles.Length > 0 && !GateAnswer(settlerTiles[0], true) && !GateAnswer(bestTile, true)
             && ScrubbedAdvisorSlots(settler, baseline, new int[0]) >= 0);
         surface.AllWater = false;
         surface.DistrictFrame++;
-        SetPresentationMode(ArmyActionType.CreateCamp);
+        // The mode the pin gate answers for is a published fact now: no row stamps it. The next
+        // refresh, in whatever mode it runs, publishes the mode the gate then reads.
 
         // F. Game surface contract: the membership mask (SPEC section 2 step 6) and the startup
         // name checks for every member the rewrite adds (no partial binding).
@@ -1055,8 +1126,8 @@ internal static class Program
         Check("camp takeover stamps the mode on the evaluation", scanEval.SettleType == ArmyActionType.CreateCamp);
         Check("camp takeover reserves the activation baseline",
             scanEval.ValidTileCount == 0 && scanEval.ValidTiles.Length == 1 + DefaultTailCapacity);
-        Check("camp takeover publishes the admission set", !Inactive() && AscendingUnique(PickSet.Current.Tiles));
-        Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PickSet.Current.Tiles, 1) == 0);
+        Check("camp takeover publishes the admission set", !Inactive() && AscendingUnique(PublishedTiles()));
+        Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PublishedTiles(), 1) == 0);
         Check("camp takeover leaves the best-camp arrays retired",
             AllMinusOne(scanEval.BestCampPlacementTileIndexes) && AllMinusOne(scanEval.BestCampPlacementIndexes));
         Check("no mod code reads the best-camp array: a populated best tile outside the set shows no pin",
@@ -1064,11 +1135,11 @@ internal static class Program
 
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         int trackedStars = canvas.Started;
         int liveStars = trackedStars; // fx the renderer currently tracks, in members of the last set rendered
         Check("the takeover's admission set renders one star per member",
-            trackedStars == PickSet.Current.Tiles.Length);
+            trackedStars == PublishedTiles().Length);
 
         // The army-level gate: any hit publishes INACTIVE, writes nothing, asks no tile, and
         // displays nothing: stars cleared, no pin, no vanilla surface taking the advice's place.
@@ -1078,7 +1149,7 @@ internal static class Program
         Check("army-level gate hit publishes INACTIVE", Inactive());
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("army-level gate hit clears every tracked star",
             canvas.Stopped == trackedStars && canvas.Started == 0);
         Check("army-level gate hit shows no pin and takes no vanilla fallback",
@@ -1092,6 +1163,73 @@ internal static class Program
         Check("army-level gate hit at the takeover skips vanilla and publishes INACTIVE",
             !ScanPass(scanSnapshot, scanEval, ArmyActionType.CreateCamp, 131) && Inactive());
         surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
+
+        // G1 (F1). The army-level gate now asks the shared army-state rows - ArmyActionHelper
+        // .FillCommonArmyFailures: the decoy ActionProhibited, ArmyLockedByBattle and ArmyLocked
+        // checks - before the mode's own army rows, because the camp and settler army overloads never
+        // run them (SPEC section 2 step 3, SPEC section 3). The harness seam is the surface's
+        // TryGetArmyGateFailures: it reports what those rows answer for the mode.
+        var commonGateEval = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(commonGateEval);
+        snapshot.PresentationData.PlacementEvaluation = commonGateEval;
+        var commonGateTail = SlotsSignature(commonGateEval, baseline, commonGateEval.ValidTiles.Length);
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
+        surface.DistrictFrame++;
+        Refresh(commonGateEval, 131); // the camp session the rows start from: an active published set
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PresentationView.Current.Picks);
+        Check("the army-gate rows start from an active published camp set",
+            !Inactive() && PresentationView.Current.Mode == ArmyActionType.CreateCamp
+            && canvas.Started == PublishedTiles().Length);
+        int commonGateStars = canvas.Started;
+
+        // ArmyLockedByBattle: the shared army rows' battle lock, answered in camp mode.
+        surface.ArmyGateModes = "";
+        surface.TileGateCalls = 0;
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.ArmyLockedByBattle;
+        Refresh(commonGateEval, 131);
+        Check("a battle-locked army publishes INACTIVE in camp mode", Inactive());
+        Check("a battle-locked army asks no tile gate", surface.TileGateCalls == 0);
+        Check("a battle-locked army writes no entries: the tail stays the activation baseline",
+            SlotsSignature(commonGateEval, baseline, commonGateEval.ValidTiles.Length) == commonGateTail);
+        plugin.Stars.Render(PresentationView.Current.Picks);
+        Check("a battle-locked army starts no star and clears every tracked star",
+            canvas.Started == 0 && canvas.Stopped == commonGateStars);
+        Check("a battle-locked army shows no pin on any tile, the vanilla best tile included",
+            !GateAnswer(131, true) && !GateAnswer(132, true) && !GateAnswer(133, true) && !GateAnswer(bestTile, true));
+        Check("the camp mode dispatch reaches the army gate: exactly one camp army-gate call",
+            surface.ArmyGateModes == "CreateCamp ");
+
+        // ArmyLocked: the shared army rows' lock, answered in camp mode.
+        surface.ArmyGateModes = "";
+        surface.TileGateCalls = 0;
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.ArmyLocked;
+        Refresh(commonGateEval, 131);
+        Check("a locked army publishes INACTIVE in camp mode", Inactive());
+        Check("a locked army asks no tile gate", surface.TileGateCalls == 0);
+        Check("a locked army writes no entries: the tail stays the activation baseline",
+            SlotsSignature(commonGateEval, baseline, commonGateEval.ValidTiles.Length) == commonGateTail);
+        plugin.Stars.Render(PresentationView.Current.Picks);
+        Check("a locked army starts no star, and none of the published sets has a tracked star left",
+            canvas.Started == 0 && canvas.Stopped == 0);
+        Check("a locked army shows no pin on any tile, the vanilla best tile included",
+            !GateAnswer(131, true) && !GateAnswer(132, true) && !GateAnswer(133, true) && !GateAnswer(bestTile, true));
+        Check("the camp mode dispatch reaches the army gate again: exactly one camp army-gate call",
+            surface.ArmyGateModes == "CreateCamp ");
+
+        surface.ArmyGateModes = "";
+        surface.TileGateCalls = 0;
+        Check("the camp scan pass reaches the army gate, skips vanilla and publishes nothing on a locked army",
+            !ScanPass(scanSnapshot, commonGateEval, ArmyActionType.CreateCamp, 131) && Inactive()
+            && ModeCalls(surface.ArmyGateModes, "CreateCamp") == 1 && surface.TileGateCalls == 0);
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
+        surface.DistrictFrame++;
+        snapshot.PresentationData.PlacementEvaluation = scanEval; // the rows below drive the scan evaluation
 
         // Unmapped and untaken modes: vanilla stays fully in charge, the advisor publishes INACTIVE.
         var foreignEval = NewEvaluation(ArmyActionType.Ransack, baseline);
@@ -1109,9 +1247,9 @@ internal static class Program
         Check("the city takeover reserves the activation baseline",
             cityScan.ValidTileCount == 0 && cityScan.ValidTiles.Length == 1 + DefaultTailCapacity);
         Check("the city takeover publishes its admission set",
-            !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+            !Inactive() && AscendingUnique(PublishedTiles()));
         Check("the city takeover writes no pick entries",
-            ScanTailHits(cityScan, PickSet.Current.Tiles, 1) == 0);
+            ScanTailHits(cityScan, PublishedTiles(), 1) == 0);
         Check("the city takeover leaves the best-camp arrays retired",
             AllMinusOne(cityScan.BestCampPlacementTileIndexes) && AllMinusOne(cityScan.BestCampPlacementIndexes));
 
@@ -1132,12 +1270,12 @@ internal static class Program
         surface.ScoreByTile[133] = 50;
         surface.DistrictFrame++;
         Refresh(scanEval, 131);
-        var admitted = PickSet.Current.Tiles;
+        var admitted = PublishedTiles();
         Check("quota 2 plus the rank-2 tie set publishes 3 tiles",
             admitted.Length == 3 && admitted[0] == 131 && admitted[1] == 132 && admitted[2] == 133);
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("every admitted tile gets a star, uncapped", canvas.Started == admitted.Length);
         liveStars = admitted.Length;
         Check("pins follow the published membership",
@@ -1152,7 +1290,7 @@ internal static class Program
         Check("vanilla's unpatched filter chain runs, and rejects the writer's scrubbed slot",
             !VanillaPinFilter(ScrubbedEntry()));
         Check("the gate carries no yield rule of its own: every zero-yield member is admitted",
-            GateAnswer(admitted[0]) && GateAnswer(admitted[1]) && GateAnswer(admitted[2]));
+            admitted.Length == 3 && GateAnswer(admitted[0]) && GateAnswer(admitted[1]) && GateAnswer(admitted[2]));
 
         // A member three territories deep in the placement neighborhood - the far side of the
         // map from the cursor: its star renders, the gate admits it, and the on-screen culling
@@ -1160,10 +1298,10 @@ internal static class Program
         Plugin.CfgRangeLevels.Value = 3;
         surface.DistrictFrame++;
         Refresh(scanEval, 101);
-        var neighborhood = PickSet.Current.Tiles;
+        var neighborhood = PublishedTiles();
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("a neighborhood member far from the cursor gets its star",
             ContainsTile(neighborhood, 123) && canvas.Started == neighborhood.Length);
         liveStars = neighborhood.Length; // the fx the renderer tracks after this pass
@@ -1177,11 +1315,11 @@ internal static class Program
         surface.DistrictFrame++;
         Refresh(scanEval, 131);
         Check("an unaffordable tile stays in the published set",
-            !Inactive() && PickSet.Current.Tiles.Length == 3 && PickSet.Current.Contains(131));
+            !Inactive() && PublishedTiles().Length == 3 && PresentationView.Current.Contains(131));
         surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.TileIsOccupied;
         surface.DistrictFrame++;
         Refresh(scanEval, 131);
-        Check("a non-cost gate failure drops the tile", !Inactive() && !PickSet.Current.Contains(131));
+        Check("a non-cost gate failure drops the tile", !Inactive() && !PresentationView.Current.Contains(131));
         Check("a dropped tile keeps its star off the set, and its pin off", !GateAnswer(131));
         surface.TileGateFlags.Clear();
 
@@ -1193,7 +1331,7 @@ internal static class Program
         Check("zero picks publish INACTIVE", Inactive());
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("INACTIVE clears every tracked star", canvas.Stopped == liveStars && canvas.Started == 0);
         Check("zero picks show no pin: neither a former member nor a vanilla best tile",
             !GateAnswer(131, true) && !GateAnswer(5001, true));
@@ -1204,7 +1342,7 @@ internal static class Program
         surface.ResourceTiles.Add(133);
         surface.DistrictFrame++;
         Refresh(scanEval, 131);
-        Check("the resource tile is excluded from admission", !Inactive() && !PickSet.Current.Contains(133));
+        Check("the resource tile is excluded from admission", !Inactive() && !PresentationView.Current.Contains(133));
         surface.ResourceTiles.Clear();
 
 
@@ -1222,7 +1360,7 @@ internal static class Program
         surface.DistrictFrame++;
         int maskedBefore = surface.TileGateCalls, unmaskedBefore = surface.UnmaskedGateCalls;
         bool vanillaRefreshSkipped = !Refresh(scanEval, 131);
-        var hoveredSet = PickSet.Current.Tiles;
+        var hoveredSet = PublishedTiles();
         var slotEntry = scanEval.ValidTiles[cursorSlot];
         Check("the advisor owns the refresh: vanilla's whole hover body, append rule included, is skipped",
             vanillaRefreshSkipped);
@@ -1239,20 +1377,21 @@ internal static class Program
         Check("the cursor slot carries no glyph of its own", !slotEntry.Showable);
         Check("the advisor writes the cursor slot once: the array stays at the reserved window",
             scanEval.ValidTiles.Length == cursorSlot + 1 + DefaultTailCapacity);
-        // The gate reads the presentation evaluation of the snapshot - the same instance a
-        // refresh writes in the game, so the harness points it at the evaluation under test.
+        // The writer lands the cursor-slot fields on the live evaluation, where the camp mouse marker
+        // and the city ghost read them; the pin gate reads the published copy of the same gate answer.
         snapshot.PresentationData.PlacementEvaluation = scanEval;
         canvas.Started = 0;
         canvas.Stopped = 0;
-        plugin.Stars.Render(PickSet.Current);
+        plugin.Stars.Render(PresentationView.Current.Picks);
         Check("hovering the unaffordable pick stops no star, and the tile stays a member",
             canvas.Stopped == 0 && ContainsTile(hoveredSet, 131));
         Check("the pick slot entry for the same tile is the affordable pick's shape: shown, scored",
             ShowableIsMembership(scanEval, 0, hoveredSet));
         // The pin gate's hovered rule (SettlementPlacementPinsSubset.cs:29-33) answers from the
-        // flags the advisor wrote: money drops the pin on hover, influence-only keeps it, a clean
-        // hover keeps it. Membership, stars and glyph flags never move.
-        Check("the pin gate's hovered rule reads the advisor-written cursor-slot flags",
+        // published cursor-slot failure: the same unmasked gate answer the advisor wrote into the
+        // cursor slot. Money drops the pin on hover, influence-only keeps it, a clean hover keeps it.
+        // Membership, stars and glyph flags never move.
+        Check("the pin gate's hovered rule reads the published cursor-slot failure",
             !GateAnswer(131));
         surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughInfluence;
         surface.DistrictFrame++;
@@ -1267,7 +1406,7 @@ internal static class Program
             && scanEval.ValidTiles[cursorSlot].TileIndex == 131
             && GateAnswer(131));
         Check("hovering the pick is the affordable shape: same membership, same star set",
-            PickSet.Current.Tiles.Length == hoveredSet.Length && ShowableIsMembership(scanEval, 0, hoveredSet));
+            PublishedTiles().Length == hoveredSet.Length && ShowableIsMembership(scanEval, 0, hoveredSet));
         surface.TileGateFlags.Clear();
         Check("every advisor slot above the live count is zeroed, cursor slot window included",
             ZeroFilledAboveCount(scanEval, scanEval.ValidTileCount, scanEval.ValidTiles.Length));
@@ -1388,7 +1527,7 @@ internal static class Program
         plugin.Writer.NoteActivation(stable);
         surface.DistrictFrame++;
         Refresh(stable, 131);
-        var stableFirst = PickSet.Current.Tiles;
+        var stableFirst = PublishedTiles();
         int stableSlot = plugin.Writer.CursorSlotIndex(stable);
         int stableLength = stable.ValidTiles.Length;
         Check("the first refresh writes each pick at its invariant slot after the cursor slot",
@@ -1399,8 +1538,8 @@ internal static class Program
             plugin.Writer.CursorSlotIndex(stable) == stableSlot
             && stable.ValidTiles.Length == stableLength
             && stable.CurrentPositionIndex == stableSlot
-            && SlotIndexOf(stable, PickSet.Current.Tiles, stableSlot + 1)
-               == InvariantSlots(PickSet.Current.Tiles, stableSlot + 1));
+            && SlotIndexOf(stable, PublishedTiles(), stableSlot + 1)
+               == InvariantSlots(PublishedTiles(), stableSlot + 1));
         Plugin.CfgTopHovered.Value = 2;
         Plugin.CfgTopNeighbour.Value = 1;
         Plugin.CfgRangeLevels.Value = 2;
@@ -1444,6 +1583,122 @@ internal static class Program
             namedMembers && shippedLine.Contains("90"));
         Check("the startup tail capacity follows the config: quotas 2/1 with 3 hops is 170",
             LoadGate.ReadyLine(GameApi.RequiredNames, AdvisorConfig.TailCapacityFor(2, 1, 3)).Contains("170"));
+
+        // K (F3, SPEC section 1 row 16): mode exit takes the channel with the cursor. The published
+        // set belongs to the mode the cursor is in, so leaving that mode - publishing inactive for it,
+        // exactly what the DeactivateCursor postfix does - must not leave a stale set gating pins.
+        var exitEval = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(exitEval);
+        snapshot.PresentationData.PlacementEvaluation = exitEval;
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
+        surface.AllWater = false; surface.AllOcean = false;
+        surface.TileGateFlags.Clear();
+        surface.ScoreByTile[131] = 90; surface.ScoreByTile[132] = 50; surface.ScoreByTile[133] = 50;
+        surface.DistrictFrame++;
+        Refresh(exitEval, 131);
+        var exitMembers = PublishedTiles();
+        Check("the mode-exit row starts from a published camp set that gates its members",
+            !Inactive() && PresentationView.Current.Mode == ArmyActionType.CreateCamp
+            && exitMembers.Length > 0 && GateAnswer(exitMembers[0], true) && !GateAnswer(bestTile, true));
+        PresentationView.PublishInactive(ArmyActionType.CreateCamp); // the cursor-deactivation publish
+        Check("mode exit leaves no pin on a former member: a stale set gates nothing",
+            exitMembers.Length > 0 && !GateAnswer(exitMembers[0], true));
+        Check("mode exit leaves no pin on the vanilla best tile", !GateAnswer(bestTile, true));
+        Check("mode exit publishes the inactive content for the mode the cursor left",
+            Inactive() && PresentationView.Current.Mode == ArmyActionType.CreateCamp);
+
+        // The wired mode the cursor enters next publishes its own set on the same channel, and pins
+        // follow that set: the exited mode's members are out of the gate.
+        var exitCity = NewEvaluation(ArmyActionType.FoundCity, baseline);
+        plugin.Writer.NoteActivation(exitCity);
+        surface.ScoreByTile[131] = 10; surface.ScoreByTile[132] = 7; surface.ScoreByTile[133] = 5;
+        surface.DistrictFrame++;
+        Refresh(exitCity, 130);
+        var exitCityMembers = PublishedTiles();
+        Check("the next wired mode republishes the channel from its own refresh",
+            PresentationView.Current.Mode == ArmyActionType.FoundCity && !Inactive()
+            && exitCityMembers.Length == 2);
+        Check("pins follow the new mode's set, not the exited mode's",
+            GateAnswer(131, true) && GateAnswer(132, true) && !GateAnswer(133, true)
+            && !GateAnswer(bestTile, true));
+
+        // An unwired mode's exit leaves vanilla's own gate answer standing: the channel owns no mode
+        // the table has not wired.
+        PresentationView.PublishInactive(ArmyActionType.Ransack);
+        Check("PublishInactive for an unwired mode leaves vanilla's gate answer on", GateAnswer(bestTile, true));
+        Check("PublishInactive for an unwired mode leaves it off when vanilla answers off",
+            !GateAnswer(bestTile, false));
+
+        // The real deactivation postfix, on the presentation thread: stars cleared, channel out of
+        // the mode. A renderer of its own tracks exactly this set's fx, so the clear is countable.
+        Refresh(exitEval, 131); // the camp session live again: a published set and its stars
+        var exitCanvas = new CountingCanvas();
+        plugin.Stars = new StarRenderer(exitCanvas);
+        plugin.Stars.Render(PresentationView.Current.Picks);
+        int exitTracked = exitCanvas.Started;
+        exitCanvas.Started = 0;
+        exitCanvas.Stopped = 0;
+        var deactivatePostfix = typeof(CursorDeactivatePatch).GetMethod("Postfix",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        deactivatePostfix.Invoke(null, null);
+        Check("the deactivate postfix stops every tracked star and starts none",
+            exitCanvas.Stopped == exitTracked && exitCanvas.Started == 0);
+        Check("the deactivate postfix takes the channel out of the mode with the cursor",
+            Inactive() && PresentationView.Current.Mode == ArmyActionType.CreateCamp
+            && exitMembers.Length > 0 && !GateAnswer(exitMembers[0], true) && !GateAnswer(bestTile, true));
+        snapshot.PresentationData.PlacementEvaluation = scanEval;
+
+        // L (F5, SPEC section 1 + section 5 row 9): a pipeline throw never falls back to vanilla. The
+        // takeover's catch path hands the evaluation to PublishEmpty: the advisor's contribution is
+        // dropped, every advisor slot is the shape vanilla skips, the advisor's own glyphs are gone,
+        // and the channel goes INACTIVE - vanilla's own entries stay, vanilla's body is not re-run.
+        var thrown = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        var thrownVanilla = VanillaGlyphs(thrown, baseline);
+        plugin.Writer.NoteActivation(thrown);
+        surface.DistrictFrame++;
+        Refresh(thrown, 131); // a normal advisor write first: the tail and the channel are the advisor's
+        int thrownSlot = plugin.Writer.CursorSlotIndex(thrown);
+        Check("the pipeline-failure row starts from a normal advisor write",
+            !Inactive() && thrown.ValidTileCount > baseline + 1
+            && thrown.ValidTiles[thrownSlot].TileIndex == 131);
+        plugin.Advisor.PublishEmpty(thrown); // the catch path's call, in a taken-over mode
+        // The fix changed this row's shape: ClearTail drops the contribution by scrubbing every
+        // advisor slot, and Write keeps ValidTileCount where the last write left it - vanilla scores
+        // ValidTiles[0..Length) and skips the Initialize(-1) shape, so a scrubbed slot inside the
+        // count is inert. "Back to the baseline" is therefore: the cursor index points at nothing, no
+        // advisor entry is live anywhere in the count, and the array is still the reserved window.
+        Check("a pipeline throw drops the advisor's contribution to the baseline: no advisor entry is live",
+            thrown.CurrentPositionIndex == -1
+            && ScrubbedAdvisorSlots(thrown, baseline, new int[0]) == thrown.ValidTileCount - baseline - 1
+            && thrown.ValidTiles.Length == thrownSlot + 1 + DefaultTailCapacity);
+        Check("every advisor slot is zeroed, the cursor slot's own entry with it",
+            ZeroFilledAboveCount(thrown, thrownSlot, thrown.ValidTiles.Length)
+            && thrown.ValidTiles[thrownSlot].TileIndex == -1 && !thrown.ValidTiles[thrownSlot].Showable);
+        Check("the pipeline throw leaves no advisor glyph shown in its slots",
+            ShowableIsMembership(thrown, baseline, new int[0]));
+        Check("the pipeline throw leaves the channel INACTIVE and shows no pin",
+            Inactive() && !GateAnswer(131, true) && !GateAnswer(bestTile, true));
+        Check("a pipeline throw keeps vanilla's own entries exactly as vanilla left them",
+            VanillaGlyphs(thrown, baseline) == thrownVanilla);
+        surface.ThrowAtTheGate = true; // a pipeline that throws mid-pass
+        var thrownSignature = Signature(thrown);
+        Check("a throwing pipeline skips vanilla's refresh body and publishes INACTIVE",
+            !Refresh(thrown, 131) && Inactive() && Signature(thrown) == thrownSignature);
+        Check("a throwing pipeline at the takeover skips vanilla's evaluation and publishes INACTIVE",
+            !ScanPass(scanSnapshot, thrown, ArmyActionType.CreateCamp, 131) && Inactive()
+            && ReleasedTail(thrown, plugin.Writer.CursorSlotIndex(thrown)));
+        surface.ThrowAtTheGate = false;
+        // The scan path carries vanilla's activation, so the takeover above re-baselined this
+        // evaluation: the rows below read the state the takeover left, and must not move it.
+        var thrownAfterTakeover = Signature(thrown);
+        surface.ReadyFlag = false; // a surface that cannot answer at all
+        plugin.Advisor.Run(thrown, 131, new SimulationEntityGUID(1UL));
+        Check("an unanswering surface publishes INACTIVE and writes nothing (the refresh entry)",
+            Inactive() && Signature(thrown) == thrownAfterTakeover);
+        plugin.Advisor.RunScanPass(thrown, 131, new SimulationEntityGUID(1UL));
+        Check("an unanswering surface publishes INACTIVE and writes nothing (the scan entry)",
+            Inactive() && Signature(thrown) == thrownAfterTakeover);
+        surface.ReadyFlag = true;
 
         // The load gate on an unresolved surface: log the failure list, then close the game, and
         // never hand control back to the advisor wiring. The termination mechanism is injected, so
@@ -1493,7 +1748,42 @@ internal static class Program
         Check("a resolved surface loads: nothing logged, the game stays open",
             readyEvents.Count == 0 && readyLog.Count == 0);
 
+        // F2 (startup coverage): the mode-policy table's shared army-state row is a startup-bound
+        // name like every gate the patch surface binds, so a build that renamed it must fail the load
+        // gate in exactly the shape the rows above fail it: log, close, and never a partial binding.
+        var commonGateEvents = new List<string>();
+        var commonGateLog = new List<string>();
+        var commonGateReturned = false;
+        var commonGateThrown = "";
+        GameApi.ReadyStatic = false;
+        GameApi.ResolveError = ModePolicy.CommonArmyGateLabel + "; " + ModePolicy.SettlerArmyGateLabel;
+        try
+        {
+            LoadGate.EnforceResolvedSurface(
+                message => { commonGateEvents.Add("log"); commonGateLog.Add(message); },
+                () => commonGateEvents.Add("close"));
+            commonGateReturned = true;
+        }
+        catch (Exception e) { commonGateThrown = e.Message; }
+        Check("an unresolved shared army-state row fails the load gate: logged, closed, never a partial binding",
+            commonGateEvents.Count == 2 && commonGateEvents[0] == "log" && commonGateEvents[1] == "close"
+            && !commonGateReturned && commonGateThrown.Contains(ModePolicy.CommonArmyGateLabel));
+        Check("the load-failure line names every unresolved member, the shared army row included",
+            commonGateLog.Count == 1 && commonGateLog[0].Contains(ModePolicy.CommonArmyGateLabel)
+            && commonGateLog[0].Contains(ModePolicy.SettlerArmyGateLabel)
+            && commonGateLog[0].StartsWith("Load failure, unresolved game members: "));
+        Check("the startup table carries the shared army-state row exactly once, and the ready line names it",
+            GameApi.RequiredNames.Count(name => name == ModePolicy.CommonArmyGateLabel) == 1
+            && LoadGate.ReadyLine(GameApi.RequiredNames, AdvisorConfig.TailCapacityFor(2, 1, 2))
+                .Contains(ModePolicy.CommonArmyGateLabel));
+        GameApi.ReadyStatic = true;
+        GameApi.ResolveError = string.Empty;
+
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
+        Console.WriteLine("[noopc] " + (s_Failures == 0
+            ? "rows checked: " + s_Checks
+            : s_Failures + " of " + s_Checks + " rows violated"));
+        Console.WriteLine(s_Failures == 0 ? "[noopc] NOOP PASS" : "[noopc] NOOP FAIL");
         return s_Failures == 0 ? 0 : 1;
     }
 
