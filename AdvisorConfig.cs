@@ -25,11 +25,11 @@ namespace SettlementPlacementAdvisor
             return new Entries
             {
                 TopHovered = file.Bind(Section, "TopHovered", 2,
-                    "Recommended tiles shown on the hovered territory; count is mandatory, below-minimum-FIMS tiles are included. The tile under the mouse ghost counts visually on top of this."),
+                    "Admission quota on the hovered territory: this many tiles minimum, plus every tile tied with the last admitted score."),
                 TopNeighbour = file.Bind(Section, "TopNeighbour", 1,
-                    "Recommended tiles shown on every other territory in range; count is mandatory."),
+                    "Admission quota on every other territory in the placement neighborhood: this many tiles minimum, plus every tile tied with the last admitted score."),
                 RangeLevels = file.Bind(Section, "RangeLevels", 2,
-                    "Adjacency range from the hovered territory, center counts as 1: 3 = hovered + adjacent + adjacent-to-adjacent. Land adjacency only: sea, cliff and mountain edges never count as a range step."),
+                    "Placement-neighborhood hops from the hovered territory, the hovered territory counts as level 1: 3 = hovered + adjacent + adjacent-to-adjacent. Every adjacency edge counts as a hop: sea, cliff, mountain and closed-border edges included."),
             };
         }
     }
