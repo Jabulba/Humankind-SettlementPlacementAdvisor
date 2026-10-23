@@ -57,11 +57,14 @@ namespace SettlementPlacementAdvisor
         private static readonly Pick[] s_Empty = new Pick[0];
 
         /// <summary>
-        /// Vanilla's activation call, the tail-reservation point the takeover replaces. Plain
-        /// reflection, not Harmony helpers: the harnesses drive this code with no patcher loaded.
+        /// Vanilla's activation call, the tail-reservation point the takeover replaces: the
+        /// startup-bound member table resolves it once, with the game's own parameter shape (the
+        /// base class also declares a no-arg Initialize, so a name-only lookup is ambiguous).
         /// </summary>
-        private static readonly MethodInfo InitializeMethod = typeof(CampPlacementEvaluation).GetMethod(
-            "Initialize", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(CustomTileIndexArea) }, null);
+        private static MethodInfo ActivationMethod
+        {
+            get { return GameApi.Method(GameApi.EvaluationInitialize); }
+        }
 
         /// <summary>One evaluation's tail window. TailStart is the cursor slot; ReservedEnd is the
         /// exclusive end of every slot this evaluation has ever reserved (the config-derived reserve,
@@ -126,12 +129,13 @@ namespace SettlementPlacementAdvisor
         /// </summary>
         public void ReserveBaseline(CampPlacementEvaluation evaluation)
         {
-            if (InitializeMethod == null)
+            var initialize = ActivationMethod;
+            if (initialize == null)
             {
-                GameApi.Fail("CampPlacementEvaluation.Initialize(CustomTileIndexArea)");
+                GameApi.Fail(GameApi.EvaluationInitialize);
                 return;
             }
-            InitializeMethod.Invoke(evaluation, new object[] { null });
+            initialize.Invoke(evaluation, new object[] { null });
 
             // In the game the Initialize postfix reserves the tail from the new baseline. The
             // harness runs no patcher, so the reservation is taken here as well: it re-reads the
