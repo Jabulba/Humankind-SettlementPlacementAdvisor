@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using Amplitude; // FixedPoint (namespace Amplitude, assembly Amplitude.Framework.dll).
+using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
 using Amplitude.Mercury.Interop;
+using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency (the surface's adjacency edges)
 using Amplitude.Mercury.Simulation;
+using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition; // edge transition flags
 
 namespace SettlementPlacementAdvisor
 {
@@ -26,9 +29,10 @@ namespace SettlementPlacementAdvisor
         public int TopHovered;
         public int TopNeighbour;
         public int RangeLevels;
+        public ArmyActionType Mode;
 
         public static CursorContext For(int hoveredTerritory, object army, int empireIndex,
-            int topHovered, int topNeighbour, int rangeLevels)
+            int topHovered, int topNeighbour, int rangeLevels, ArmyActionType mode)
         {
             return new CursorContext
             {
@@ -38,6 +42,7 @@ namespace SettlementPlacementAdvisor
                 TopHovered = Math.Max(1, topHovered),
                 TopNeighbour = Math.Max(1, topNeighbour),
                 RangeLevels = Math.Max(1, rangeLevels),
+                Mode = mode,
             };
         }
     }
@@ -88,18 +93,22 @@ namespace SettlementPlacementAdvisor
             if (!m_Game.GetCurrentFrames(out districtFrame, out constructionFrame, out visibilityFrame))
                 return null;
 
+            object districtDefinition;
+            if (!m_Game.TryGetDistrictDefinition(context.Mode, out districtDefinition))
+                return null; // unmapped mode: fail closed
+
             m_Budget = MaxEvaluationsPerRefresh;
             m_BudgetExceededLogged = false;
 
             m_Merged.Clear();
             m_SeenTiles.Clear();
-            AddUnique(GetTerritoryPicks(context.HoveredTerritory, context.TopHovered, context.Army,
+            AddUnique(GetTerritoryPicks(context.HoveredTerritory, context.TopHovered, context.Army, districtDefinition,
                 districtFrame, constructionFrame, visibilityFrame, context.EmpireIndex));
 
             CollectRangeTerritories(context.HoveredTerritory, context.RangeLevels);
             for (int t = 0; t < m_RangeTerritories.Count; t++)
             {
-                AddUnique(GetTerritoryPicks(m_RangeTerritories[t], context.TopNeighbour, context.Army,
+                AddUnique(GetTerritoryPicks(m_RangeTerritories[t], context.TopNeighbour, context.Army, districtDefinition,
                     districtFrame, constructionFrame, visibilityFrame, context.EmpireIndex));
             }
 
@@ -117,9 +126,10 @@ namespace SettlementPlacementAdvisor
 
         /// <summary>
         /// Territories in range excluding the center. Center counts as level 1, so a territory
-        /// at hop d is in range when d + 1 &lt;= rangeLevels. Only LAND edges count: the game's
-        /// adjacency array also carries sea, cliff, mountain and closed edges (GameApi filters
-        /// them). Capped so the evaluation tail stays bounded.
+        /// at hop d is in range when d + 1 &lt;= rangeLevels. Only the edges a ground army
+        /// crosses (TerritoryTransition.Open) count as a hop: the surface reports every
+        /// adjacency edge, the sea, cliff, mountain and closed edges are dropped here.
+        /// Capped so the evaluation tail stays bounded.
         /// </summary>
         private void CollectRangeTerritories(int hoveredTerritory, int rangeLevels)
         {
@@ -161,16 +171,17 @@ namespace SettlementPlacementAdvisor
 
         private void AddAdjacent(int territoryIndex, List<int> output)
         {
-            var adjacent = m_Game.LandAdjacentTerritories(territoryIndex);
-            for (int i = 0; i < adjacent.Length; i++)
+            var edges = m_Game.AdjacentTerritories(territoryIndex);
+            for (int i = 0; i < edges.Length; i++)
             {
-                if (m_SeenTerritories.Add(adjacent[i]))
-                    output.Add(adjacent[i]);
+                if ((edges[i].Transition & TerritoryTransition.Open) == TerritoryTransition.None) continue;
+                if (m_SeenTerritories.Add(edges[i].TerritoryIndex))
+                    output.Add(edges[i].TerritoryIndex);
             }
         }
 
         private Pick[] GetTerritoryPicks(
-            int territoryIndex, int topCount, object army,
+            int territoryIndex, int topCount, object army, object districtDefinition,
             int districtFrame, int constructionFrame, int visibilityFrame, int empireIndex)
         {
             CacheEntry cached;
@@ -186,11 +197,11 @@ namespace SettlementPlacementAdvisor
 
             var picks = new List<Pick>(topCount);
             var truncated = false;
-            bool isClaimed;
-            int[] tiles;
-            if (m_Game.GetTerritoryFacts(territoryIndex, out isClaimed, out tiles)
-                && !isClaimed)
+            TerritoryFacts facts;
+            if (m_Game.GetTerritoryFacts(territoryIndex, out facts) == TerritoryFactsResult.Known
+                && !facts.Claimed) // Unknown is a distinct outcome: an unknown territory never advises.
             {
+                var tiles = facts.Tiles;
                 var evaluated = new List<Pick>(tiles.Length);
                 for (int i = 0; i < tiles.Length; i++)
                 {
@@ -207,11 +218,11 @@ namespace SettlementPlacementAdvisor
                     m_Budget--;
 
                     var tile = tiles[i];
-                    if (!m_Game.IsSettlementSiteTile(tile) || m_Game.IsTileWater(tile)) continue;
+                    if (!m_Game.IsSettlementSiteTile(districtDefinition, tile) || m_Game.IsTileWater(tile)) continue;
                     if (!m_Game.IsTileExplored(tile, empireIndex)) continue;
                     DistrictPlacementEvaluation.ValidTile validTile;
                     FixedPoint score;
-                    if (!m_Game.EvaluateTile(army, tile, out validTile, out score)) continue;
+                    if (!m_Game.EvaluateTile(army, tile, districtDefinition, out validTile, out score)) continue;
                     evaluated.Add(new Pick { Tile = tile, Score = score, Data = validTile });
                 }
 
