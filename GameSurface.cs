@@ -77,6 +77,14 @@ namespace SettlementPlacementAdvisor
         bool IsTileWater(int tileIndex);
 
         /// <summary>
+        /// Resource tile: the tile's point of interest resolves to a resource deposit, the fact
+        /// vanilla records as ValidTile.Resource (SimulationEvaluator.cs:2691-2694) and that its
+        /// settlement scoring excludes (2399), leaving the tile to an extractor. Fail closed:
+        /// true when the point of interest cannot be resolved.
+        /// </summary>
+        bool IsTileResourceTile(int tileIndex);
+
+        /// <summary>
         /// Tile scouted by the given empire, as the gate's own predicate
         /// ((ExplorationMap | BattleExplorationMap) &amp; bits) != 0 (VisibilityController.cs:255-258):
         /// any shared vision bit counts. Cache invalidation via VisibilityFrame.

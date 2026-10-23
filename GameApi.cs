@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using Amplitude; // FixedPoint lives in namespace Amplitude (assembly Amplitude.Framework.dll).
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType, DistrictDefinition
+using Amplitude.Mercury.Data.World; // PointOfInterestDefinition, ResourceDepositDefinition
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation; // SimulationEntityGUID
 using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency (the snapshot's territory edges)
@@ -36,6 +37,7 @@ namespace SettlementPlacementAdvisor
         private const string RepositoryLookup = "SimulationEntityRepository.TryGetSimulationEntity";
         private const string EvaluateOne = "SimulationEvaluator.EvaluateOneSettlementPlacement";
         private const string Ponderation = "SimulationEvaluator.settlementScorePonderation";
+        private const string PonderationInit = "SimulationEvaluator.InitSettlementScorePonderation";
         private const string TerrainAndPoi = "ConstructibleHelper.CheckTerrainAndPOI";
         private const string CampDefinition = "DepartmentOfTheInterior.CampDefinition";
         private const string CityCenterDefinition = "DepartmentOfTheInterior.CityCenterDefinition";
@@ -84,6 +86,7 @@ namespace SettlementPlacementAdvisor
             new NameBinding { Label = RepositoryLookup, TypeName = "Amplitude.Mercury.Simulation.SimulationEntityRepository", Member = "TryGetSimulationEntity", Shape = "genericArmy" },
             new NameBinding { Label = EvaluateOne, TypeName = "Amplitude.Mercury.Simulation.SimulationEvaluator", Member = "EvaluateOneSettlementPlacement", Shape = "name" },
             new NameBinding { Label = Ponderation, TypeName = "Amplitude.Mercury.Simulation.SimulationEvaluator", Member = "settlementScorePonderation", Shape = null },
+            new NameBinding { Label = PonderationInit, TypeName = "Amplitude.Mercury.Simulation.SimulationEvaluator", Member = "InitSettlementScorePonderation", Shape = "name" },
             new NameBinding { Label = TerrainAndPoi, TypeName = "Amplitude.Mercury.Simulation.ConstructibleHelper", Member = "CheckTerrainAndPOI", Shape = "terrainAndPoi" },
             new NameBinding { Label = CampDefinition, TypeName = "Amplitude.Mercury.Simulation.DepartmentOfTheInterior", Member = "CampDefinition", Shape = null },
             new NameBinding { Label = CityCenterDefinition, TypeName = "Amplitude.Mercury.Simulation.DepartmentOfTheInterior", Member = "CityCenterDefinition", Shape = null },
@@ -222,6 +225,33 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
+        /// Resource tile: the tile's point of interest resolves to a resource deposit. This is
+        /// the fact vanilla writes into ValidTile.Resource (SimulationEvaluator.cs:2691-2694,
+        /// World.cs:613) and its settlement scoring excludes (2399). Fail closed: an
+        /// unresolvable point of interest reports a resource tile, so the tile is never advised.
+        /// </summary>
+        public bool IsTileResourceTile(int tileIndex)
+        {
+            try
+            {
+                var world = AiSnapshots.World;
+                var tileInfo = world == null ? null : world.TileInfo;
+                var pointsOfInterest = world == null ? null : world.PointOfInterestDefinitions;
+                if (tileInfo == null || pointsOfInterest == null) return true;
+                if (tileIndex < 0 || tileIndex >= tileInfo.Length) return true;
+                var pointOfInterest = tileInfo[tileIndex].PointOfInterest;
+                if (pointOfInterest == byte.MaxValue) return false;
+                if (pointOfInterest >= pointsOfInterest.Length) return true;
+                return pointsOfInterest[pointOfInterest] is ResourceDepositDefinition;
+            }
+            catch (Exception e)
+            {
+                Fail("resource tile lookup: " + e.Message);
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Fail-open on reflection issues. Exploration is monotonic, so a cached pick is only
         /// invalidated by VisibilityFrame when new scouting occurs during a settlement session.
         /// Non-major empires are fog-unlimited in the gate (ArmyActionHelper.cs:475), so a
@@ -288,7 +318,7 @@ namespace SettlementPlacementAdvisor
                 vt = (DistrictPlacementEvaluation.ValidTile)args[1];
 
                 var fims = vt.OverallFims;
-                var ponderation = (FimsInfo)Field(Ponderation).GetValue(evaluator);
+                var ponderation = SettlementWeightTable(evaluator);
                 fims.Multiply(ref ponderation);
 
                 validTile = vt;
@@ -300,6 +330,20 @@ namespace SettlementPlacementAdvisor
                 Fail("EvaluateOneSettlementPlacement: " + e.Message);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// The vanilla settlement weight table (Food 1.5, Industry 1, rest zero,
+        /// SimulationEvaluator.cs:3649-3660). Vanilla initializes it inside its full evaluation
+        /// (2396-2398); with that evaluation replaced, the advisor's scoring is the only caller
+        /// left, so it initializes the table itself when it is still empty.
+        /// </summary>
+        private static FimsInfo SettlementWeightTable(object evaluator)
+        {
+            var ponderation = (FimsInfo)Field(Ponderation).GetValue(evaluator);
+            if (!ponderation.IsEmpty) return ponderation;
+            Method(PonderationInit).Invoke(evaluator, null);
+            return (FimsInfo)Field(Ponderation).GetValue(evaluator);
         }
 
         public bool GetCurrentFrames(out int districtFrame, out int constructionFrame, out int visibilityFrame)

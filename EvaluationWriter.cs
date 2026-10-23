@@ -1,7 +1,9 @@
 using System;
+using System.Reflection;
 using System.Threading;
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
+using Amplitude.Mercury.Simulation; // CustomTileIndexArea
 
 namespace SettlementPlacementAdvisor
 {
@@ -23,6 +25,13 @@ namespace SettlementPlacementAdvisor
         public const int TailCapacity = 128;
 
         private static readonly Pick[] s_Empty = new Pick[0];
+
+        /// <summary>
+        /// Vanilla's activation call, the tail-reservation point the takeover replaces. Plain
+        /// reflection, not Harmony helpers: the harnesses drive this code with no patcher loaded.
+        /// </summary>
+        private static readonly MethodInfo InitializeMethod = typeof(CampPlacementEvaluation).GetMethod(
+            "Initialize", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(CustomTileIndexArea) }, null);
 
         private int m_TailStart = -1; // cursor slot index (fixed for the session); -1 = no baseline
 
@@ -61,6 +70,30 @@ namespace SettlementPlacementAdvisor
             var plugin = Plugin.Instance;
             if (plugin != null)
                 plugin.Log("activation baseline count=" + m_TailStart + " capacity=" + evaluation.ValidTiles.Length);
+        }
+
+        /// <summary>
+        /// The activation baseline in a taken-over mode. Vanilla's full settlement evaluation was
+        /// the only Initialize caller in camp mode (SimulationEvaluator.cs:2332); with the
+        /// takeover replacing it, the advisor runs Initialize itself over an empty candidate area.
+        /// The Initialize postfix then reserves the tail from this baseline, vanilla's hover append
+        /// finds a real array to append its cursor entry into (CampPlacementEvaluation.cs:75-81
+        /// dereferences ValidTiles.Length), and the best-camp arrays come back all -1, which is
+        /// how the retired best-of-2 cascade leaves them.
+        /// </summary>
+        public void ReserveBaseline(CampPlacementEvaluation evaluation)
+        {
+            if (InitializeMethod == null)
+            {
+                GameApi.Fail("CampPlacementEvaluation.Initialize(CustomTileIndexArea)");
+                return;
+            }
+            InitializeMethod.Invoke(evaluation, new object[] { null });
+
+            // In the game the Initialize postfix reserves the tail from the new baseline. The
+            // harness runs no patcher, so the reservation is taken here as well: it re-reads the
+            // same baseline, so doing it twice reserves the same window.
+            NoteActivation(evaluation);
         }
 
         /// <summary>

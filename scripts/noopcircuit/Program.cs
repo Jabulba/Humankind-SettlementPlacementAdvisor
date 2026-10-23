@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using Amplitude;
+using Amplitude.Mercury; // WorldPosition (the snapshot cursor)
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency
@@ -35,13 +37,21 @@ internal sealed class GraphSurface : GameSurface
     public bool IsSettlementSiteTile(object districtDefinition, int tileIndex) { return districtDefinition != null; }
     public bool IsTileWater(int tileIndex) { return AllWater; }
     public bool IsTileExplored(int tileIndex, int empireIndex) { return true; }
+    public bool IsTileResourceTile(int tileIndex) { return ResourceTiles.Contains(tileIndex); }
+
+    public HashSet<int> ResourceTiles = new HashSet<int>();
+    public Dictionary<int, int> ScoreByTile = new Dictionary<int, int>();
+    public ArmyActionFailureFlags_Part1 ArmyGateFlags;
+    public Dictionary<int, ArmyActionFailureFlags_Part1> TileGateFlags = new Dictionary<int, ArmyActionFailureFlags_Part1>();
+    public int TileGateCalls;
 
     public bool EvaluateTile(object army, int tileIndex, object districtDefinition, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
     {
         var vt = default(DistrictPlacementEvaluation.ValidTile);
         vt.Initialize(tileIndex);
         validTile = vt;
-        score = tileIndex;
+        int declared;
+        score = ScoreByTile.TryGetValue(tileIndex, out declared) ? declared : tileIndex;
         return true;
     }
 
@@ -84,9 +94,15 @@ internal sealed class GraphSurface : GameSurface
         return edges;
     }
 
-    public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence, out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
+    /// <summary>The mode's tile gate: scripted per-tile flags, with the mask applied when the
+    /// pipeline asks for it, and a call counter so "no tile asked" is checkable.</summary>
+    public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence,
+        out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
     {
-        failures = ArmyActionFailureFlags.None;
+        TileGateCalls++;
+        ArmyActionFailureFlags_Part1 scripted;
+        failures = (ArmyActionFailureFlags)(TileGateFlags.TryGetValue(tileIndex, out scripted) ? scripted : 0);
+        if (maskMoneyAndInfluence) failures = (ArmyActionFailureFlags)GameApi.ApplyMoneyInfluenceMask(failures);
         moneyCost = FixedPoint.Zero;
         influenceCost = FixedPoint.Zero;
         unitCost = FixedPoint.Zero;
@@ -95,7 +111,7 @@ internal sealed class GraphSurface : GameSurface
 
     public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
     {
-        failures = ArmyActionFailureFlags.None;
+        failures = (ArmyActionFailureFlags)ArmyGateFlags;
         return army != null;
     }
 }
@@ -123,8 +139,18 @@ internal static class Program
 
     private static void Check(string name, bool ok)
     {
-        Console.WriteLine("[noopc] " + (ok ? "OK   " : "FAIL ") + name);
+        Console.WriteLine("[noopc] " + (ok ? "OK   " : "FAIL ") + name + (ok ? "" : "  [set: " + DescribeSet() + "]"));
         if (!ok) s_Failures++;
+    }
+
+    private static string DescribeSet()
+    {
+        var set = PickSet.Current;
+        if (set == null) return "no set published";
+        if (set.Tiles == null) return "INACTIVE";
+        var sb = new StringBuilder("tiles=");
+        for (int i = 0; i < set.Tiles.Length; i++) sb.Append(set.Tiles[i]).Append(' ');
+        return sb.ToString();
     }
 
     /// <summary>
@@ -193,6 +219,40 @@ internal static class Program
         Check(name, (bool)args[0] == expected);
     }
 
+    /// <summary>
+    /// Drive the real takeover prefix (EvaluatePlacement). Its return value is the mode-dispatch
+    /// decision: false skips vanilla's full settlement evaluation, true leaves vanilla in charge.
+    /// </summary>
+    private static bool ScanPass(SettlementPlacementCursorSnapshot snapshot, CampPlacementEvaluation eval, ArmyActionType mode, int cursorTile)
+    {
+        WorldPosition.SetWorldSize(10, 1000, false); // so a tile index round-trips through ToTileIndex
+        SetMember(snapshot, "actionType", mode);
+        SetMember(snapshot, "nextConstructiblePosition", new WorldPosition(cursorTile));
+        var prefix = typeof(PlacementScanPatch).GetMethod("Prefix", BindingFlags.NonPublic | BindingFlags.Static);
+        return (bool)prefix.Invoke(null, new object[] { snapshot, new SimulationEntityGUID(1UL), eval });
+    }
+
+    /// <summary>The pin gate's answer for a tile, with vanilla's own answer as the input.</summary>
+    private static bool GateAnswer(int tileIndex, bool vanilla = true)
+    {
+        var postfix = typeof(SettlementPinsPatch).GetMethod("Postfix", BindingFlags.NonPublic | BindingFlags.Static);
+        var info = default(DistrictPlacementEvaluation.ValidTile);
+        info.Initialize(tileIndex);
+        var args = new object[] { vanilla, info };
+        postfix.Invoke(null, args);
+        return (bool)args[0];
+    }
+
+    private static void SetMember(object target, string field, object value)
+    {
+        for (var type = target.GetType(); type != null; type = type.BaseType)
+        {
+            var f = type.GetField(field, BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            if (f != null) { f.SetValue(target, value); return; }
+        }
+        throw new Exception("snapshot member not found: " + field);
+    }
+
     private static bool Inactive()
     {
         return PickSet.Current == null || PickSet.Current.Tiles == null;
@@ -203,6 +263,25 @@ internal static class Program
         if (tiles == null || tiles.Length == 0) return false;
         for (int i = 1; i < tiles.Length; i++)
             if (tiles[i] <= tiles[i - 1]) return false;
+        return true;
+    }
+
+    /// <summary>How many of the published pick tiles appear as evaluation entries.</summary>
+    private static int ScanTailHits(CampPlacementEvaluation e, int[] tiles)
+    {
+        var hits = 0;
+        for (int i = 0; i < e.ValidTiles.Length; i++)
+            for (int t = 0; t < tiles.Length; t++)
+                if (e.ValidTiles[i].TileIndex == tiles[t]) hits++;
+        return hits;
+    }
+
+    /// <summary>The vanilla best-placement arrays a retired cascade leaves unpopulated.</summary>
+    private static bool AllMinusOne(int[] indexes)
+    {
+        if (indexes == null || indexes.Length == 0) return false;
+        for (int i = 0; i < indexes.Length; i++)
+            if (indexes[i] != -1) return false;
         return true;
     }
 
@@ -404,6 +483,99 @@ internal static class Program
             required.Contains("Territory.Adjacencies") && required.Contains("Territory.TileIndexes"));
         Check("startup checks every surface member by exactly one name entry",
             GameApi.RequiredNames.Distinct().Count() == GameApi.RequiredNames.Length);
+
+        // G. The camp pipeline at the takeover (ticket 13). Vanilla's full camp evaluation is
+        // skipped, the scan pass publishes its admission set on the baseline the advisor
+        // reserves, and the best-of-2 cascade arrays stay retired.
+        var scanEval = NewEvaluation(ArmyActionType.Ransack, baseline); // the takeover stamps the mode
+        var scanSnapshot = CreateSnapshot();
+        bool vanillaRuns = ScanPass(scanSnapshot, scanEval, ArmyActionType.CreateCamp, 131);
+        Check("camp takeover skips vanilla's full camp evaluation", !vanillaRuns);
+        Check("camp takeover stamps the mode on the evaluation", scanEval.SettleType == ArmyActionType.CreateCamp);
+        Check("camp takeover reserves the activation baseline",
+            scanEval.ValidTileCount == 0 && scanEval.ValidTiles.Length >= 1 + EvaluationWriter.TailCapacity);
+        Check("camp takeover publishes the admission set", !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+        Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PickSet.Current.Tiles) == 0);
+        Check("camp takeover leaves the best-camp arrays retired",
+            AllMinusOne(scanEval.BestCampPlacementTileIndexes) && AllMinusOne(scanEval.BestCampPlacementIndexes));
+
+        // The army-level gate: any hit publishes INACTIVE, writes nothing, and asks no tile.
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.ArmyLocked;
+        surface.TileGateCalls = 0;
+        Refresh(scanEval, 131);
+        Check("army-level gate hit publishes INACTIVE", Inactive());
+        bool gateCleanTail = scanEval.ValidTileCount <= 1; // the cursor slot, nothing appended
+        for (int i = 1; i < scanEval.ValidTiles.Length; i++)
+            if (scanEval.ValidTiles[i].TileIndex != -1) gateCleanTail = false;
+        Check("army-level gate hit writes no pick entries", gateCleanTail);
+        Check("army-level gate hit skips the scan: no tile gate call", surface.TileGateCalls == 0);
+        Check("army-level gate hit at the takeover skips vanilla and publishes INACTIVE",
+            !ScanPass(scanSnapshot, scanEval, ArmyActionType.CreateCamp, 131) && Inactive());
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
+
+        // Unmapped and untaken modes: vanilla stays fully in charge, the advisor publishes INACTIVE.
+        var foreignEval = NewEvaluation(ArmyActionType.Ransack, baseline);
+        var foreignClean = Signature(foreignEval);
+        Check("an unmapped mode leaves vanilla fully in charge", ScanPass(scanSnapshot, foreignEval, ArmyActionType.Ransack, 131));
+        Check("an unmapped mode publishes INACTIVE", Inactive());
+        Check("an unmapped mode writes nothing", Signature(foreignEval) == foreignClean);
+
+        var cityScan = NewEvaluation(ArmyActionType.FoundCity, baseline);
+        var cityScanClean = Signature(cityScan);
+        Check("city founding is not taken over in this slice", ScanPass(scanSnapshot, cityScan, ArmyActionType.FoundCity, 131));
+        Check("city founding publishes INACTIVE at the takeover", Inactive());
+        Check("city founding keeps its vanilla evaluation untouched", Signature(cityScan) == cityScanClean);
+
+        // Admission on the refresh: quota 2 with 1 tile at rank 1 and 2 tiles tied at rank 2
+        // publishes 3 (SPEC section 2 step 8), every admitted tile gets a star, and pins follow
+        // the published membership.
+        surface.ScoreByTile[131] = 90;
+        surface.ScoreByTile[132] = 50;
+        surface.ScoreByTile[133] = 50;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        var admitted = PickSet.Current.Tiles;
+        Check("quota 2 plus the rank-2 tie set publishes 3 tiles",
+            admitted.Length == 3 && admitted[0] == 131 && admitted[1] == 132 && admitted[2] == 133);
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        Check("every admitted tile gets a star, uncapped", canvas.Started == admitted.Length);
+        Check("pins follow the published membership",
+            GateAnswer(131) && GateAnswer(132) && GateAnswer(133) && !GateAnswer(121) && !GateAnswer(5001));
+
+        // The tile gate mask on the pipeline path: money and influence stay in, everything else out.
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughMoney;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        Check("an unaffordable tile stays in the published set",
+            !Inactive() && PickSet.Current.Tiles.Length == 3 && PickSet.Current.Contains(131));
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.TileIsOccupied;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        Check("a non-cost gate failure drops the tile", !Inactive() && !PickSet.Current.Contains(131));
+        Check("a dropped tile keeps its star off the set, and its pin off", !GateAnswer(131));
+        surface.TileGateFlags.Clear();
+
+        // Zero picks: INACTIVE displays nothing, stars cleared, gate back to vanilla.
+        surface.AllWater = true;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        Check("zero picks publish INACTIVE", Inactive());
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        Check("INACTIVE clears every tracked star", canvas.Stopped == admitted.Length && canvas.Started == 0);
+        Check("INACTIVE hands the pin gate back to vanilla", !GateAnswer(131, false) && GateAnswer(5001, true));
+        surface.AllWater = false;
+
+        // The resource-tile exclusion is a rule of the pipeline, not of the gate.
+        surface.ResourceTiles.Add(133);
+        surface.DistrictFrame++;
+        Refresh(scanEval, 131);
+        Check("the resource tile is excluded from admission", !Inactive() && !PickSet.Current.Contains(133));
+        surface.ResourceTiles.Clear();
+
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
         return s_Failures == 0 ? 0 : 1;
     }
