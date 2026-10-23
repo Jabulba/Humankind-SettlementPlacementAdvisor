@@ -9,7 +9,8 @@ vocabulary, `CONTRIBUTING.md` the commit/release standard. Read those before cha
 - `scripts/build-advisor.sh [msbuild args]` — Release build, then deploys the DLL to
   `$GAME_DIR/BepInEx/plugins` automatically (`CopyToPlugins`). Pass `-p:GameDir=...` or export
   `GAME_DIR`; if the install is missing the build *succeeds* but logs `NOT deployed`.
-- `scripts/test-range.sh` — range-rule harness. `scripts/test-noop.sh` — no-op/pin/tail contract.
+- `scripts/test-range.sh` — placement-neighborhood harness. `scripts/test-noop.sh` — the
+  write-side, pin and tail contract.
   These are the whole test suite: plain console apps, no test framework, so `dotnet test` runs
   nothing. They have no case filter; running one runs all its cases (fast).
 - `scripts/launch-game.sh [--kill-first]` — Steam launch, waits for `Ready: advisor patches
@@ -45,9 +46,10 @@ Simulation thread: `Patches.cs` → `Advisor` → `PickComputation` → `Evaluat
 `PickSet`. `Plugin.cs` is only composition; `GameSurface` is the rules' seam and `GameApi` its
 reflection adapter.
 
-- **Only `ArmyActionType.CreateCamp` may write.** FoundCity/FoundCityWithSettler share
-  `CampPlacementEvaluation`; city sessions must remain a strict no-op (deactivate only). The
-  no-op harness enforces this.
+- **Writes happen only through the active mode's advisor pipeline, into that mode's evaluation.**
+  The mode-policy table wires `CreateCamp` and `FoundCity`; the three modes share
+  `CampPlacementEvaluation`, so a mode the table has not wired writes nothing and an activation
+  scrubs the tail the previous mode's session left. The write-side harness enforces this.
 - `EvaluationWriter` owns a fixed tail window in the shared `ValidTiles` array. Write pick slots
   in place, barrier, then raise `ValidTileCount`; never move vanilla entries. A settlement tail left
   after a mode switch must be scrubbed, not merely counted down.

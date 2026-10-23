@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# No-op / shown-set contract harness: asserts the advisor writes nothing on a mode it does not own,
-# keeps its settlement tail behaviour, and renders the published pick set as the shown set.
+# Write-side contract harness: asserts the advisor writes through the active mode's pipeline into
+# that mode's evaluation only, scrubs the tail an activation inherits, keeps the slot, barrier and
+# zero-fill invariants, and renders the published pick set as the shown set.
 # Non-zero exit = a contract violation.
 set -euo pipefail
 

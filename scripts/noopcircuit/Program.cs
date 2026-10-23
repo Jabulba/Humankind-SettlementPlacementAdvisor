@@ -45,6 +45,8 @@ internal sealed class GraphSurface : GameSurface
     public Dictionary<int, ArmyActionFailureFlags_Part1> TileGateFlags = new Dictionary<int, ArmyActionFailureFlags_Part1>();
     public int TileGateCalls;
     public int UnmaskedGateCalls; // the cursor slot asks unmasked: money and influence stay in
+    public string TileGateModes = ""; // every mode the tile gate was asked for: m = masked, u = unmasked
+    public string ArmyGateModes = ""; // every mode the army-level gate was asked for
     public Dictionary<int, FixedPoint> TileGateMoney = new Dictionary<int, FixedPoint>();
     public Dictionary<int, FixedPoint> TileGateInfluence = new Dictionary<int, FixedPoint>();
     public Dictionary<int, FixedPoint> TileGateUnit = new Dictionary<int, FixedPoint>();
@@ -109,6 +111,7 @@ internal sealed class GraphSurface : GameSurface
     {
         TileGateCalls++;
         if (!maskMoneyAndInfluence) UnmaskedGateCalls++;
+        TileGateModes += mode + (maskMoneyAndInfluence ? "m " : "u ");
         ArmyActionFailureFlags_Part1 scripted;
         failures = (ArmyActionFailureFlags)(TileGateFlags.TryGetValue(tileIndex, out scripted) ? scripted : 0);
         if (maskMoneyAndInfluence) failures = (ArmyActionFailureFlags)GameApi.ApplyMoneyInfluenceMask(failures);
@@ -126,6 +129,7 @@ internal sealed class GraphSurface : GameSurface
 
     public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
     {
+        ArmyGateModes += mode + " ";
         failures = (ArmyActionFailureFlags)ArmyGateFlags;
         return army != null;
     }
@@ -142,11 +146,15 @@ internal sealed class CountingCanvas : PickCanvas
 }
 
 /// <summary>
-/// DEBUG [noopc] shown-set contract harness. All three settle types share
-/// CampPlacementEvaluation, so a city session must see zero writes. Checks compare a full
-/// signature of the mutable state before and after, catching any mutation, not just known
-/// ones. Camp placement is the control: tail reserved, picks written Showable, vanilla's own
-/// glyphs untouched, stars and the pin gate answering the published membership. The pin gate is
+/// DEBUG [noopc] write-side contract harness (SPEC section 6). All three settle types share
+/// CampPlacementEvaluation, and the city no-op contract is retired: the advisor writes through the
+/// active mode's pipeline into that mode's evaluation only, so the surviving write-side rows are
+/// tail reservation, the barrier-then-count order, the scrub on every activation, the slot
+/// stability, and the shown set. Checks compare a full signature of the mutable state before and
+/// after, catching any mutation, not just known ones. Camp placement and city founding are the
+/// wired controls: tail reserved, picks written Showable, vanilla's own glyphs untouched, stars and
+/// the pin gate answering the published membership, the cursor slot from the mode gate call with no
+/// mask. A mode the mode-policy table has not wired is the one that writes nothing. The pin gate is
 /// driven through the real postfix, and vanilla's unpatched pin filter chain is driven directly.
 /// </summary>
 internal static class Program
@@ -435,6 +443,26 @@ internal static class Program
         return sb.ToString();
     }
 
+    /// <summary>Every advisor-owned slot above the activation baseline is the scrubbed shape: the
+    /// tail a previous mode's session left is released on an activation, in every mode (SPEC
+    /// section 6 row 4), so no settlement entry survives into a city session and none survives a
+    /// city session into a settlement one.</summary>
+    private static bool ReleasedTail(CampPlacementEvaluation e, int baseline)
+    {
+        for (int i = baseline + 1; i < e.ValidTiles.Length; i++)
+            if (e.ValidTiles[i].TileIndex != -1 || e.ValidTiles[i].Showable) return false;
+        return true;
+    }
+
+    /// <summary>How many gate calls the mode log recorded for one label.</summary>
+    private static int ModeCalls(string gateLog, string label)
+    {
+        var calls = 0;
+        for (int i = 0; i < gateLog.Length; i++)
+            if (gateLog.IndexOf(label, i) == i) calls++;
+        return calls;
+    }
+
     private static int Main()
     {
         var surface = new GraphSurface();
@@ -446,38 +474,26 @@ internal static class Program
         Plugin.Instance = plugin;
         const int baseline = 6;
 
-        // A. FoundCity: the advisor never touches the evaluation, in any entry point.
-        var city = NewEvaluation(ArmyActionType.FoundCity, baseline);
-        var clean = Signature(city);
-
-        plugin.Writer.NoteActivation(city);
-        Check("FoundCity activation: no resize, no tail claim", Signature(city) == clean);
-
-        Refresh(city, 5001);
-        Check("FoundCity refresh: zero writes to the evaluation", Signature(city) == clean);
-        Check("FoundCity refresh: vanilla top-2 glyphs keep their Showable flag",
-            city.ValidTiles[0].Showable && city.ValidTiles[1].Showable);
-        Check("FoundCity refresh: pick set inactive", Inactive());
-
-        int version = PickSet.Current == null ? 0 : PickSet.Current.Version;
-        Refresh(city, 5002);
-        Refresh(city, 5003);
-        Check("FoundCity: repeated refreshes publish nothing and mutate nothing",
-            (PickSet.Current == null ? 0 : PickSet.Current.Version) == version && Signature(city) == clean);
-
-        var stray = new Pick { Tile = 7777, Score = 9, Data = city.ValidTiles[0] };
-        plugin.Writer.Write(city, new[] { stray }, CursorSlot.Unanswered);
-        Check("FoundCity: Write is a no-op", Signature(city) == clean);
-        plugin.Writer.ClearTail(city);
-        Check("FoundCity: ClearTail is a no-op", Signature(city) == clean);
-
-        // FoundCityWithSettler is the same shared evaluation type: same no-op.
+        // A. The modes the mode-policy table has not wired stay vanilla's, in every entry point.
+        // FoundCityWithSettler shares this evaluation type and gets its row with its own ticket;
+        // the city no-op contract itself is retired (ticket 17): the advisor writes through the
+        // active mode's pipeline only, so an unwired mode is the one that writes nothing.
         var settler = NewEvaluation(ArmyActionType.FoundCityWithSettler, baseline);
         var settlerClean = Signature(settler);
         plugin.Writer.NoteActivation(settler);
         Refresh(settler, 5002);
+        var stray = new Pick { Tile = 7777, Score = 9, Data = settler.ValidTiles[0] };
+        plugin.Writer.Write(settler, new[] { stray }, CursorSlot.Unanswered);
         plugin.Writer.ClearTail(settler);
-        Check("FoundCityWithSettler: zero writes", Signature(settler) == settlerClean);
+        Check("an unwired city mode: no tail claim, zero writes", Signature(settler) == settlerClean);
+        Check("an unwired city mode publishes nothing", Inactive());
+
+        var unwired = NewEvaluation(ArmyActionType.Ransack, baseline);
+        var unwiredClean = Signature(unwired);
+        plugin.Writer.NoteActivation(unwired);
+        Refresh(unwired, 5002);
+        Check("an unmapped mode: no tail claim, zero writes, pick set inactive",
+            Signature(unwired) == unwiredClean && Inactive());
 
         // B. Camp control: the shown set. Stars and glyphs are the published membership; the
         // writer owns the tail slots only, and vanilla's own glyph flags are its to keep.
@@ -572,9 +588,9 @@ internal static class Program
 
         PickSet.Current = null;
         Gate("camp before any publish: no pin shows", true, bestTile, false);
-        SetPresentationMode(ArmyActionType.FoundCity);
-        Gate("a mode the advisor does not own keeps a vanilla pin answer on", true, bestTile, true);
-        Gate("a mode the advisor does not own keeps a vanilla pin answer off", false, pickTile, false);
+        SetPresentationMode(ArmyActionType.FoundCityWithSettler);
+        Gate("a mode the table has not wired keeps a vanilla pin answer on", true, bestTile, true);
+        Gate("a mode the table has not wired keeps a vanilla pin answer off", false, pickTile, false);
         SetPresentationMode(ArmyActionType.CreateCamp);
 
         // C2. Zero-pick publish (every neighborhood territory claimed/all-water): the advisor
@@ -613,35 +629,162 @@ internal static class Program
         Check("flag off restores the same picks",
             !Inactive());
 
-        // D. The !Ready half of the Run gate: a not-ready refresh writes nothing in either mode
+        // D. The !Ready half of the Run gate: a not-ready refresh writes nothing in a wired mode
         // and deactivates.
         surface.ReadyFlag = false;
-        Refresh(city, 5003);
-        Check("not-ready city refresh: zero writes, pick set inactive", Signature(city) == clean && Inactive());
         var settlementBeforeNotReady = Signature(settlement);
         Refresh(settlement, 131);
         Check("not-ready settlement refresh: zero writes, pick set inactive",
             Signature(settlement) == settlementBeforeNotReady && Inactive());
         surface.ReadyFlag = true;
 
-        // E. Mode switch on the shared evaluation: a city activation must inherit no settlement state.
-        // Vanilla Initialize only lowers ValidTileCount, so the grown array and the written tail
-        // slots of the settlement session are exactly what the city session then scores: the advisor
-        // has to release them. Its own slots (>= baseline) are checked separately from
-        // vanilla's ([0, baseline)), which must stay untouched.
+        // D2. City founding is a wired row of the mode-policy table (ticket 17). The city session
+        // publishes an admission set under the same admission and presentation contract as camp -
+        // quota plus top tie set, membership pin gate, INACTIVE displays nothing - writes only into
+        // its own evaluation, and reports the founding cost on the cursor slot.
+        var city = NewEvaluation(ArmyActionType.FoundCity, baseline);
+        var cityGlyphs = VanillaGlyphs(city, baseline);
+        var campUntouched = Signature(settlement);
+        plugin.Writer.NoteActivation(city);
+        Check("FoundCity activation reserves the tail window on its own evaluation",
+            city.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity
+            && plugin.Writer.CursorSlotIndex(city) == baseline);
+        Check("a city activation claims no tail on a foreign evaluation",
+            Signature(settlement) == campUntouched);
+
+        int citySlot = plugin.Writer.CursorSlotIndex(city);
+        snapshot.PresentationData.PlacementEvaluation = city;
+        SetPresentationMode(ArmyActionType.FoundCity);
+        SetPresentationFailure(ArmyActionFailureFlags.None);
+        surface.ScoreByTile[131] = 200;
+        surface.TileGateCalls = 0;
+        surface.TileGateModes = "";
+        surface.ArmyGateModes = "";
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        Check("the advisor owns the city refresh: vanilla's whole hover body is skipped",
+            !Refresh(city, 131));
+        var cityTiles = PickSet.Current.Tiles;
+        Check("FoundCity refresh publishes ascending unique tiles", AscendingUnique(cityTiles));
+        Check("FoundCity refresh writes every pick into its own tail slot",
+            city.ValidTileCount > baseline + 1
+            && ScanTailHits(city, cityTiles, baseline + 1) == cityTiles.Length);
+        Check("FoundCity refresh: Showable equals pick-set membership in the advisor's slots",
+            ShowableIsMembership(city, baseline, cityTiles));
+        Check("FoundCity refresh: vanilla's glyph flags are untouched",
+            VanillaGlyphs(city, baseline) == cityGlyphs);
+        Check("the city session asks the FoundCity gates only, the cursor slot unmasked",
+            surface.ArmyGateModes == "FoundCity "
+            && ModeCalls(surface.TileGateModes, "FoundCitym") + ModeCalls(surface.TileGateModes, "FoundCityu") == surface.TileGateCalls
+            && ModeCalls(surface.TileGateModes, "FoundCitym") > 0
+            && ModeCalls(surface.TileGateModes, "FoundCityu") == 1);
+        Check("the city cursor index points at the advisor's own slot, on the hovered tile",
+            city.CurrentPositionIndex == citySlot && city.ValidTiles[citySlot].TileIndex == 131
+            && !city.ValidTiles[citySlot].Showable);
+        Check("the city writes touch no other evaluation", Signature(settlement) == campUntouched);
+        plugin.Stars.Render(PickSet.Current);
+        Check("the city pick set starts one star per pick", canvas.Started == cityTiles.Length);
+        Check("city pins follow the published membership",
+            GateAnswer(cityTiles[0]) && GateAnswer(cityTiles[1]) && !GateAnswer(bestTile));
+        Check("every city advisor slot above the live count is zeroed",
+            ZeroFilledAboveCount(city, city.ValidTileCount,
+                citySlot + 1 + EvaluationWriter.TailCapacity));
+
+        // The unaffordable city pick (SPEC section 5 row 7): the same star and the same pin an
+        // affordable pick has, and the founding failure reaching the player on hover through the
+        // cursor slot - the red ghost's source in a city mode.
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughMoney
+            | ArmyActionFailureFlags_Part1.NotEnoughInfluence;
+        surface.TileGateMoney[131] = (FixedPoint)40;
+        surface.TileGateInfluence[131] = (FixedPoint)25;
+        surface.DistrictFrame++;
+        Refresh(city, 130); // the cursor sits off the pick: nothing is on the hover yet
+        var unaffordable = PickSet.Current.Tiles;
+        Check("an unaffordable city tile stays in the published set", ContainsTile(unaffordable, 131));
+        plugin.Stars.Render(PickSet.Current);
+        Check("the unaffordable city pick keeps its star: no fx stopped, the same member set",
+            canvas.Stopped == 0 && unaffordable.Length == cityTiles.Length);
+        Check("the unaffordable city pick shows its pin", GateAnswer(131));
+        int cityStars = unaffordable.Length;
+
+        int cityUnmaskedBefore = surface.UnmaskedGateCalls;
+        Refresh(city, 131); // the cursor hovers the pick: the failure surfaces on the cursor slot
+        Check("the city cursor slot comes from the unmasked FoundCity gate call",
+            surface.UnmaskedGateCalls == cityUnmaskedBefore + 1
+            && surface.TileGateModes.EndsWith("FoundCityu "));
+        Check("hovering the unaffordable pick reports the founding failure on the city cursor slot",
+            (city.SettleFailure & (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughMoney) != 0
+            && (city.SettleFailure & (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughInfluence) != 0
+            && city.CurrentPositionIndex == citySlot
+            && city.ValidTiles[citySlot].TileIndex == 131);
+        Check("the hovered unaffordable pick keeps its star and its membership",
+            PickSet.Current.Tiles.Length == cityStars
+            && ShowableIsMembership(city, baseline, PickSet.Current.Tiles));
+        Check("the hovered unaffordable pick loses its pin on vanilla's hovered rule", !GateAnswer(131));
+
+        surface.TileGateFlags.Clear();
+        surface.TileGateMoney.Clear();
+        surface.TileGateInfluence.Clear();
+        surface.DistrictFrame++;
+        Refresh(city, 131);
+        Check("the clean city hover reports no founding failure and the pin is back",
+            city.SettleFailure == ArmyActionFailureFlags.None
+            && city.InstantMoneyCost == FixedPoint.Zero
+            && city.InstantInfluenceCost == FixedPoint.Zero
+            && city.InstantUnitCost == FixedPoint.Zero
+            && GateAnswer(131));
+
+        // INACTIVE in a city mode displays nothing: stars cleared, no pin, no pick entries, and no
+        // vanilla surface taking the advice's place.
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        surface.AllWater = true;
+        surface.DistrictFrame++;
+        Refresh(city, 131);
+        Check("city zero picks publish INACTIVE", Inactive());
+        plugin.Stars.Render(PickSet.Current);
+        Check("city INACTIVE clears every tracked star",
+            canvas.Stopped == cityStars && canvas.Started == 0);
+        Check("city INACTIVE shows no pin and leaves no pick entry",
+            !GateAnswer(131, true) && !GateAnswer(bestTile, true)
+            && ScrubbedAdvisorSlots(city, baseline, new int[0]) >= 0);
+        surface.AllWater = false;
+        surface.DistrictFrame++;
+
+        surface.ReadyFlag = false;
+        var cityBeforeNotReady = Signature(city);
+        Refresh(city, 131);
+        Check("not-ready city refresh: zero writes, pick set inactive",
+            Signature(city) == cityBeforeNotReady && Inactive());
+        surface.ReadyFlag = true;
+
+        // E. Mode switch on the shared evaluation: an activation inherits no previous mode's
+        // settlement state, in either direction. Vanilla Initialize only lowers ValidTileCount, so
+        // the grown array and the written tail slots of the settlement session are exactly what the
+        // city session then scores: every mode's activation releases them, scrubbed, never merely
+        // counted down. The advisor's own slots (>= baseline) are checked separately from vanilla's
+        // ([0, baseline)), which must stay untouched.
         settlement.SettleType = ArmyActionType.FoundCity;
         settlement.ValidTileCount = baseline; // what vanilla's Initialize does on the city activation
         var vanillaSlots = VanillaSlots(settlement, baseline);
         plugin.Writer.NoteActivation(settlement);
-        bool tailReleased = true;
-        for (int i = baseline + 1; i < settlement.ValidTiles.Length; i++)
-            if (settlement.ValidTiles[i].TileIndex != -1) tailReleased = false;
-        Refresh(settlement, 131);
-        Check("city activation on the shared array releases the settlement tail", tailReleased);
+        Check("city activation on the shared array releases the settlement tail",
+            ReleasedTail(settlement, baseline));
         Check("city activation on the shared array leaves vanilla's slots alone",
-            VanillaSlots(settlement, baseline) == vanillaSlots && Inactive());
+            VanillaSlots(settlement, baseline) == vanillaSlots);
         Check("a mode switch leaks no suppressed glyph: vanilla's flags survive the settlement session",
             VanillaGlyphs(settlement, baseline) == settlementGlyphs);
+        Refresh(settlement, 131); // the city session runs its own pipeline on the released evaluation
+        Check("the city session on the shared evaluation publishes and writes its own admission set",
+            !Inactive() && AscendingUnique(PickSet.Current.Tiles)
+            && ScanTailHits(settlement, PickSet.Current.Tiles, baseline + 1) == PickSet.Current.Tiles.Length
+            && ShowableIsMembership(settlement, baseline, PickSet.Current.Tiles));
+        settlement.SettleType = ArmyActionType.CreateCamp;
+        settlement.ValidTileCount = baseline; // and back: a camp activation on the same evaluation
+        plugin.Writer.NoteActivation(settlement);
+        Check("camp activation releases the city tail on the shared array",
+            ReleasedTail(settlement, baseline));
 
         // F. Game surface contract: the membership mask (SPEC section 2 step 6) and the startup
         // name checks for every member the rewrite adds (no partial binding).
@@ -736,11 +879,29 @@ internal static class Program
         Check("an unmapped mode publishes INACTIVE", Inactive());
         Check("an unmapped mode writes nothing", Signature(foreignEval) == foreignClean);
 
-        var cityScan = NewEvaluation(ArmyActionType.FoundCity, baseline);
-        var cityScanClean = Signature(cityScan);
-        Check("city founding is not taken over in this slice", ScanPass(scanSnapshot, cityScan, ArmyActionType.FoundCity, 131));
-        Check("city founding publishes INACTIVE at the takeover", Inactive());
-        Check("city founding keeps its vanilla evaluation untouched", Signature(cityScan) == cityScanClean);
+        var cityScan = NewEvaluation(ArmyActionType.Ransack, baseline); // the takeover stamps the mode
+        var cityScanSnapshot = CreateSnapshot();
+        Check("city founding is taken over: vanilla's full settlement evaluation is skipped",
+            !ScanPass(cityScanSnapshot, cityScan, ArmyActionType.FoundCity, 131));
+        Check("the city takeover stamps FoundCity on the evaluation",
+            cityScan.SettleType == ArmyActionType.FoundCity);
+        Check("the city takeover reserves the activation baseline",
+            cityScan.ValidTileCount == 0 && cityScan.ValidTiles.Length >= 1 + EvaluationWriter.TailCapacity);
+        Check("the city takeover publishes its admission set",
+            !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+        Check("the city takeover writes no pick entries",
+            ScanTailHits(cityScan, PickSet.Current.Tiles, 1) == 0);
+        Check("the city takeover leaves the best-camp arrays retired",
+            AllMinusOne(cityScan.BestCampPlacementTileIndexes) && AllMinusOne(cityScan.BestCampPlacementIndexes));
+
+        // The army-level gate in a city mode behaves as it does in camp: any hit publishes INACTIVE,
+        // writes nothing, asks no tile, and leaves vanilla's full evaluation unsent.
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.AlreadyFoundACity;
+        surface.TileGateCalls = 0;
+        Check("a city army-gate hit skips vanilla and publishes INACTIVE",
+            !ScanPass(cityScanSnapshot, cityScan, ArmyActionType.FoundCity, 131) && Inactive());
+        Check("a city army-gate hit asks no tile gate", surface.TileGateCalls == 0);
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
 
         // Admission on the refresh: quota 2 with 1 tile at rank 1 and 2 tiles tied at rank 2
         // publishes 3 (SPEC section 2 step 8), every admitted tile gets a star, and pins follow
@@ -890,9 +1051,9 @@ internal static class Program
         Check("every advisor slot above the live count is zeroed, cursor slot window included",
             ZeroFilledAboveCount(scanEval, scanEval.ValidTileCount,
                 cursorSlot + 1 + EvaluationWriter.TailCapacity));
-        var keptVanilla = NewEvaluation(ArmyActionType.FoundCity, baseline);
+        var keptVanilla = NewEvaluation(ArmyActionType.FoundCityWithSettler, baseline);
         var keptSignature = Signature(keptVanilla);
-        Check("a mode not taken over keeps vanilla's own refresh, its own cursor entry included",
+        Check("a mode the table has not wired keeps vanilla's own refresh, its own cursor entry included",
             Refresh(keptVanilla, 5001) && Signature(keptVanilla) == keptSignature && Inactive());
 
         // A cursor outside the world answers nothing: the cursor slot scrubs and the cursor index
