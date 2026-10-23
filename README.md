@@ -126,12 +126,13 @@ and vanilla's full settlement evaluation is never called from that snapshot. It 
 1. Dispatches on the stamped placement mode: a wired row runs the pipeline, and a mode the table
    has not wired shows nothing and leaves its evaluation to vanilla.
 2. Asks the mode's army-level gate - the shared army-state rows the game's own gates run (decoy,
-   battle lock, army lock) and then the mode's own army rows; an army that cannot build a camp,
+   battle lock, army lock) and then the mode's own army rows, accumulating one flag set, because
+   the camp and settler army overloads never run the shared rows; an army that cannot build a camp,
    found a city, or settle with its settler advises nothing.
 3. Scans the placement neighborhood: the hovered territory plus `RangeLevels - 1` expansions over
    every adjacency edge, every tile of every territory in it, with no reachability, zone-of-control,
    movement or cap rule in the way. An edge set the game cannot answer degrades the whole pass to
-   the hovered territory's recommendations alone.
+   the hovered territory's recommendations alone and logs the surface failure.
 4. Filters the claimable territories for the mode (camp: the map edge and any territory claimed or
    carrying a settlement; city founding: the map edge and any territory carrying a settlement;
    settler: the map edge and any settled territory except the camp or pre-camp the settler
@@ -146,18 +147,18 @@ and vanilla's full settlement evaluation is never called from that snapshot. It 
 6. Writes the admitted tiles into the tail of that mode's evaluation - a window sized at the
    activation from your `RangeLevels` and quotas, tie headroom included, and grown when a published
    set needs more slots - each entry shown,
-   then publishes it on the presentation view: the pick set, the mode it was published for, and the
-   cursor slot's gate answer. Each refresh also writes the cursor slot - the hovered tile's own
-   entry, with the mode gate call's failure flags and its money, influence and unit costs - so the
-   game's mouse marker, the red ghost, and the hovered-pin rule read the advisor's facts. An
-   unaffordable recommended tile looks exactly like an affordable one, star and pin included: the
-   cost failure appears only when the cursor is on it.
+   then publishes it on the presentation view - the advisor's only presentation output: the pick
+   set, the mode it was published for, and the cursor slot's gate answer. Each refresh also writes
+   the cursor slot - the hovered tile's own entry, with the mode gate call's failure flags and its
+   money, influence and unit costs - so the game's mouse marker, the red ghost, and the hovered-pin
+   rule read the advisor's facts. An unaffordable recommended tile looks exactly like an
+   affordable one, star and pin included: the cost failure appears only when the cursor is on it.
 7. Renders a star on every published tile and answers the FIMS pin gate from the same published
    view: a member shows its pin when the game's own hovered-tile rule, read off the published
-   cursor-slot answer, allows it, and nothing else shows a pin.
-   The game's generic pin filters (unexplored tiles, zero-yield tiles, off-screen
-   culling) keep deciding which pins you see, so a member with no FIMS yield, or one outside
-   the window, gets its star and no pin.
+   cursor-slot answer, allows it, and nothing else shows a pin; a mode the mod never published
+   for keeps vanilla's own gate answer. The game's generic pin filters (unexplored tiles,
+   zero-yield tiles, off-screen culling) keep deciding which pins you see, so a member with no
+   FIMS yield, or one outside the window, gets its star and no pin.
 
 Writes happen only through the active mode's advisor pipeline, into that mode's evaluation: the
 `CreateCamp`, `FoundCity` and `FoundCityWithSettler` rows write their own session's evaluation, and
@@ -174,6 +175,10 @@ guarantee.
 
 - Built against HUMANKIND game assemblies `1.0.31.4851` (GameLibs `1.0.31.4851-r2`).
 - Requires BepInEx 5 on the Mono/Unity player.
+- The startup-bound member table is checked in full at load: it covers the gate members and the
+  district definitions, the frame counters, the vision bits, the army's empire index, the
+  snapshot's cursor fields, and every Harmony patch target; the write side and the patches resolve
+  their targets from that table instead of re-spelling names.
 - A game update can rename the internal members the mod reflects over. When that happens the mod
   refuses to load: the failure list is logged and the game closes. The line lands in `LogOutput.log`,
   in the prefix's `Player.log`, and in `BepInEx/SettlementPlacementAdvisor-load-failure.log`. A new

@@ -53,11 +53,14 @@ the domain and the modules at its seams.
 - **Pick set**: the published, immutable result of one pick computation: version, tiles
   (ascending, unique), tile membership, and the entering/leaving diff against the previous pick
   set. It gains no fields: the presentation facts travel on the view.
-- **Presentation view** (`PresentationView.Current`): the advisor's only cross-thread channel -
-  one immutable, volatile, version-gated snapshot of everything presentation may read: the pick
-  set, the placement mode it was published for, and the cursor slot's unmasked gate answer
-  (`SettleFailure`). Inactive is a view with no pick set. The pin gate and the star renderer
-  answer from one captured read, never from the live evaluation's mutable fields.
+- **Presentation view** (`PresentationView.Current`): the advisor's only presentation output and
+  its only cross-thread channel - one immutable, volatile, version-gated snapshot of everything
+  presentation may read: the pick set with its entering/leaving diffs, the placement mode it was
+  published for, and the cursor slot's unmasked gate answer (`SettleFailure`). Inactive is a view
+  with no pick set. The pin gate and the star renderer answer from one captured read, never from
+  the live evaluation's mutable fields: the pin gate answers vanilla's hovered-tile rule off the
+  published failure, and leaves vanilla's answer alone for a mode the mode-policy table has never
+  published for.
 - **Publish**: swap one presentation view into the channel. Publish carries the tiles, the mode and
   the cursor-slot answer together; identical presentation content bumps no version. An INACTIVE
   publish is the advisor's deactivation: it displays nothing - stars stop and no pin shows - in
@@ -81,9 +84,10 @@ the domain and the modules at its seams.
   tail left by a mode switch must be scrubbed over the whole region ever reserved, not just
   counted down.
 - **Placement neighborhood**: the set of territories the advisor scans: the hovered
-  territory (level 1) plus `RangeLevels` hops over all adjacency edges, covering every
-  tile of every territory in it. Sea, cliff, mountain and closed edges each count as a
-  hop; there is no movement, zone-of-control, reachability, or land-only filter.
+  territory (level 1) plus `RangeLevels - 1` expansions beyond it, each expansion a step over
+  all adjacency edges, covering every tile of every territory in it. Sea, cliff, mountain and
+  closed edges each count as a hop; there is no movement, zone-of-control, reachability, or
+  land-only filter.
 - **Claimable territory**: a territory of the placement neighborhood that passes the
   active mode's territory filter, so that mode's advisor scans it and admits from it. The camp
   row drops `IsEdgeOfTheWorld` and drops a territory that is claimed or already hosts a
@@ -105,10 +109,13 @@ the domain and the modules at its seams.
   influence failures are dropped, so an unaffordable tile stays admissible, and every other
   gate failure drops the tile. The mask is the only difference from vanilla's placement gate;
   there is no affordability pre-filter.
-- **Army-level gate**: the mode's army-side gate (`FillCreateCampFailures` for camp,
-  `FillFoundCityFailures` for city founding, `FillSettlerAbilityFailures` for city founding with
-  a settler), asked once per scan pass before any tile. Any hit skips the scan entirely and
-  publishes INACTIVE.
+- **Army-level gate**: the army-side gate the mode's row names, asked once per scan pass before
+  any tile: the shared army-state rows first (`ArmyActionHelper.FillCommonArmyFailures`: decoy
+  `ActionProhibited`, `ArmyLockedByBattle`, `ArmyLocked`), then the mode's own army rows
+  (`FillCreateCampFailures` for camp, `FillFoundCityFailures` for city founding,
+  `FillSettlerAbilityFailures` for city founding with a settler), the calls accumulating one
+  flag set - the camp and settler army overloads never run the shared rows. Any hit skips the
+  scan entirely and publishes INACTIVE.
 - **Admission set**: one territory's recommended tiles: rank the surviving scored tiles by
   score descending, tile index ascending, then take the territory's quota plus the full top tie
   set. No FIMS floor, no territory-border rule, no distance tie-break, no tie cap, no star cap.
@@ -117,8 +124,8 @@ the domain and the modules at its seams.
   `TopNeighbour` on every other) plus the full top tie set: no tie cap, no star cap.
 - **Shown set**: the published pick set, equal to the merged admission set of a scan
   pass. Stars and pins are its renderings; nothing outside the shown set displays. The pin
-  gate answers membership plus vanilla's hovered rule (the cursor slot's gate result admits
-  pins unless it reports a failure other than `NotEnoughInfluence`), and vanilla's generic
+  gate answers membership plus vanilla's hovered rule off the published cursor-slot answer (pins
+  show unless that answer reports a failure other than `NotEnoughInfluence`), and vanilla's
   pin filters - tile index, exploration, zero gains and losses, on-screen culling - stay
   unoverridden, so a zero-yield or off-screen member shows its star and no pin.
 - **Cursor slot**: the advisor-owned `TailStart` entry of the tail, which the advisor writes
@@ -150,10 +157,13 @@ the domain and the modules at its seams.
   snapshot for the territory graph. Water is a per-tile fact: sea-flagged territories can host
   valid camp sites, so the advisor never filters by the territory ocean flag. Territory facts fail
   closed: an unknown territory never advises, and an unknown edge set degrades the whole pass to
-  the hovered territory's admission set alone. The gates come from the same `ArmyActionHelper`
-  calls the game's own placement actions use, named per mode by the mode-policy table, and the
-  startup probe checks every member the mod reflects over by name - the gates and definitions, the
-  frame counters and vision bits, the snapshot's cursor fields, and every Harmony patch target.
+  the hovered territory's admission set alone, with the `GameApi.Fail` log on the surface failure.
+  The gates come from the same `ArmyActionHelper` calls the game's own placement actions use,
+  named per mode by the mode-policy table, and the
+  startup-bound member table covers every member the mod reflects over by name - the gate members
+  and district definitions, the frame counters and vision bits, the army's empire index, the
+  snapshot's cursor fields, and every Harmony patch target - and the evaluation writer and the
+  patches resolve their targets from that table instead of re-spelling names.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the evaluation of the mode the session
   is running, and only into that evaluation: the mutating entry points guard on `SettleType`, so a
   mode the mode-policy table has not wired writes nothing. One window per evaluation instance - the
