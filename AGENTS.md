@@ -17,6 +17,10 @@ vocabulary, `CONTRIBUTING.md` the commit/release standard. Read those before cha
 - `scripts/decompile-game.sh [FullyQualifiedTypeName]` — ILSpy decompile under `reference/`
   (needs `ilspycmd`). Use it for vanilla-behavior facts; `reference/` is proprietary and must
   never be committed.
+- `scripts/gen-explorer.sh` — regenerate `reference/Explorer.sln` (IDE project over the
+  decompiled trees: completion + navigation). Run after every full decompile; a handful
+  of decompiler-artifact fixes live in the decompiled files and are listed in that
+  script's header for re-application.
 - `scripts/gen-cfg.sh` — release cfg generation only; `scripts/publish-gamelibs.sh <build>` —
   repack game assemblies after a game update.
 - Runtime log: grep `SettlementPlacementAdvisor` in `$GAME_DIR/BepInEx/LogOutput.log`.

@@ -6,9 +6,14 @@
 #   (dotnet tool install -g ilspycmd), and Humankind installed via Steam.
 #
 # Usage:
-#   scripts/decompile-game.sh                    # full decompile + type lists
+#   scripts/decompile-game.sh                    # full decompile into project trees + type lists
 #   scripts/decompile-game.sh <FullyQualifiedTypeName>
 #                                                # print a single type to stdout
+#
+# Full decompile layout (project mode: one file per type, one folder per namespace):
+#   $OUT/firstpass/<Namespace>/<Type>.cs         # Amplitude.Mercury.Firstpass.dll
+#   $OUTGAME_DIR/assembly-csharp/<Namespace>/<Type>.cs
+#   $OUT/lists/                                  # type listings
 #
 # Env: GAME_MANAGED, OUT (managed cache root), OUTGAME_DIR (default: sibling outgame
 # dir), DOTNET_ROOT. Keep both output dirs inside the gitignored reference/ tree.
@@ -54,13 +59,12 @@ fi
 mkdir -p "$OUT/lists"
 
 echo "==> Simulation assembly (Firstpass): simulation, sandbox, AI snapshot, camp placement evaluation"
-ilspycmd "$FIRSTPASS" -o "$OUT"
-mv "$OUT/Amplitude.Mercury.Firstpass.decompiled.cs" "$OUT/Firstpass.decompiled.cs"
+mkdir -p "$OUT/firstpass"
+ilspycmd -p -o "$OUT/firstpass" "$FIRSTPASS"
 
 echo "==> Outgame assembly (Assembly-CSharp): Unity presentation, placement cursors, FIMS pins"
-mkdir -p "$OUTGAME_DIR"
-ilspycmd "$OUTGAME" -o "$OUTGAME_DIR"
-
+mkdir -p "$OUTGAME_DIR/assembly-csharp"
+ilspycmd -p -o "$OUTGAME_DIR/assembly-csharp" "$OUTGAME"
 echo "==> Type lists"
 ilspycmd -l c "$FIRSTPASS" > "$OUT/lists/firstpass_types.txt"
 ilspycmd -l c "$OUTGAME" > "$OUT/lists/outgame_types.txt"
