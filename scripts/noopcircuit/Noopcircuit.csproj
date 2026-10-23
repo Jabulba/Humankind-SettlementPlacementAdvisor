@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- NO-OP / SHOWN-SET CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet,
+  <!-- WRITE-SIDE / SHOWN-SET CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet,
        both Harmony postfixes and vanilla's own pin filter chain over a synthetic surface and
-       snapshot. Asserts the advisor writes nothing on a mode it does not own, keeps its
-       settlement tail, publishes its membership as the shown set, and displays nothing when
-       INACTIVE. Not part of the mod build; Plugin.cs is replaced by PluginShim.cs. -->
+       snapshot. Asserts the advisor writes through the active mode's pipeline into that mode's
+       evaluation only, scrubs the tail an activation inherits in every mode, publishes its
+       membership as the shown set, displays nothing when INACTIVE, and writes nothing in a mode
+       the mode-policy table has not wired. Not part of the mod build; Plugin.cs is PluginShim.cs. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

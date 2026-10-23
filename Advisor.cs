@@ -151,8 +151,8 @@ namespace SettlementPlacementAdvisor
             var picks = null as Pick[];
             if (!m_Game.Ready) return picks; // unanswerable game fact: nothing to advise in any mode
 
-            // Mode-policy dispatch (SPEC section 2 step 1). CreateCamp is the row this slice wires;
-            // the city modes and anything unmapped stay vanilla's.
+            // Mode-policy dispatch (SPEC section 2 step 1): the settlement row and the FoundCity
+            // row run the pipeline; the settler row and anything unmapped stay vanilla's.
             var mode = evaluation.SettleType;
             if (!ModePolicy.IsWired(mode)) return picks;
 

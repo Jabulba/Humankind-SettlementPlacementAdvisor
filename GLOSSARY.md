@@ -9,19 +9,20 @@ the domain and the modules at its seams.
 - **Placement mode**: the settlement action a session is running (`ArmyActionType`):
   `CreateCamp` for settlement placement, `FoundCity` and `FoundCityWithSettler` for city
   founding. All three share `CampPlacementEvaluation`, so the advisor's takeover sees city
-  sessions too. Contract: the mode-policy table wires `CreateCamp` only; a wired mode runs the
-  advisor's pipeline with vanilla's full settlement evaluation skipped, and any other mode is
-  left entirely to vanilla with an INACTIVE publish. A settlement tail left on the shared
-  evaluation is released on the next city activation (see Tail).
+  sessions too. Contract: the mode-policy table wires `CreateCamp` and `FoundCity`; a wired mode
+  runs the advisor's pipeline with vanilla's full settlement evaluation skipped, writing only
+  into its own evaluation, and any other mode is left entirely to vanilla with an INACTIVE
+  publish. Every activation releases the tail a previous mode's session left on the shared
+  evaluation (see Tail).
 - **Takeover point**: `SettlementPlacementCursorSnapshot.EvaluatePlacement`, the snapshot sync
   that stamps the placement mode on the evaluation and asks vanilla's full settlement
   evaluation. For a wired mode the advisor answers there: it stamps the mode, reserves the
   activation baseline (vanilla's `Initialize`), runs the scan pass, and vanilla's full
   evaluation is never called from the patched snapshot.
 - **Mode-policy table** (`ModePolicy`): the mode's row in one place: whether the pipeline runs
-  for the mode at all (wired), and the territory filter that mode evaluates. A mode the table
-  has not wired fails closed: no rules run, the advisor publishes INACTIVE, and vanilla stays
-  in charge of that mode's evaluation.
+  for the mode at all (wired), the territory filter that mode evaluates, the district definition
+  it scores with, and its tile and army gates. A mode the table has not wired fails closed: no
+  rules run, the advisor publishes INACTIVE, and vanilla stays in charge of that mode's evaluation.
 - **Scan pass**: the advisor's full evaluation of the placement neighborhood for a cursor
   position, run at the takeover point and cache-served per territory: a refresh re-serves cached
   territories and evaluates only what a moved frame changed.
@@ -65,20 +66,25 @@ the domain and the modules at its seams.
 - **Claimable territory**: a territory of the placement neighborhood that passes the
   active mode's territory filter, so that mode's advisor scans it and admits from it. The camp
   row drops `IsEdgeOfTheWorld` and drops a territory that is claimed or already hosts a
-  settlement; it never filters on the territory ocean flag, the claimability-adjacency bits,
-  the demilitarized zone, or close borders.
+  settlement; the FoundCity row drops `IsEdgeOfTheWorld` and drops only a territory that already
+  hosts a settlement, so a claimed territory with no settlement on it stays claimable for a city.
+  No row claims nothing. No row filters on the territory ocean flag, the claimability-adjacency
+  bits, the demilitarized zone, or close borders.
 - **Tile pre-filter**: the per-tile checks the mode runs on every tile of a claimable
   territory before asking the gate: water (per tile, never per territory), explored with the
   gate's any-bit visibility predicate, and terrain plus point-of-interest settlement capability
   read with the mode's district definition.
-- **Tile gate**: the mode's own placement validity call per tile (`ArmyActionHelper`'s camp
-  fill), asked with the advisor's membership mask. The gate's costs are read and never used.
+- **Tile gate**: the mode's own placement validity call per tile (`ArmyActionHelper`'s
+  `FillCreateCampFailures` tile overload for camp, `FillFoundCityFailures` position overload for
+  city founding), asked with the advisor's membership mask. The gate's costs are read and never
+  used for membership.
 - **Membership mask**: the gate mask `{NotEnoughMoney, NotEnoughInfluence}`: money and
   influence failures are dropped, so an unaffordable tile stays admissible, and every other
   gate failure drops the tile. The mask is the only difference from vanilla's placement gate;
   there is no affordability pre-filter.
-- **Army-level gate**: the mode's army-side gate (`FillCreateCampFailures`), asked once per
-  scan pass before any tile. Any hit skips the scan entirely and publishes INACTIVE.
+- **Army-level gate**: the mode's army-side gate (`FillCreateCampFailures` for camp,
+  `FillFoundCityFailures` for city founding), asked once per scan pass before any tile. Any hit
+  skips the scan entirely and publishes INACTIVE.
 - **Admission set**: one territory's recommended tiles: rank the surviving scored tiles by
   score descending, tile index ascending, then take the territory's quota plus the full top tie
   set. No FIMS floor, no territory-border rule, no distance tie-break, no tie cap, no star cap.
@@ -121,17 +127,17 @@ the domain and the modules at its seams.
   advises, and an unknown edge set degrades the scan to the territories it has reached. The gates
   come from the same `ArmyActionHelper` calls the game's own placement actions use, per mode, and the
   startup probe checks every member by name.
-- **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
-  evaluation. One fixed window per evaluation instance - the cursor snapshot's and the range
-  overlay's are live at once - reserved at its activation baseline (vanilla's `Initialize`, the
-  tail-reservation point): TailStart is the cursor slot, and the slots above it are the pick slots,
-  rewritten in place. Each refresh writes the cursor slot from the advisor's gate call with no
-  mask - the failure flags and the three instant costs with it - the pick entries `Showable` so
-  the glyph set equals the shown set, leaves vanilla's own glyph flags
+- **Evaluation writer** (`EvaluationWriter`): puts picks into the evaluation of the mode the session
+  is running, and only into that evaluation: the mutating entry points guard on `SettleType`, so a
+  mode the mode-policy table has not wired writes nothing. One fixed window per evaluation instance -
+  the cursor snapshot's and the range overlay's are live at once - reserved at its activation baseline
+  (vanilla's `Initialize`, the tail-reservation point, shared by every placement mode): TailStart is
+  the cursor slot, and the slots above it are the pick slots, rewritten in place. Each activation
+  releases the window the previous session left, in every mode. Each refresh writes the cursor slot
+  from the advisor's gate call with no mask - the failure flags and the three instant costs with it -
+  the pick entries `Showable` so the glyph set equals the shown set, leaves vanilla's own glyph flags
   alone, zeroes every slot the refresh released and every slot above the count, then barriers and
-  raises `ValidTileCount` and points `CurrentPositionIndex` at the cursor slot. Settlement placement
-  writes only: the mutating entry point guards on `SettleType`, and city activation only releases
-  the advisor's own slots.
+  raises `ValidTileCount` and points `CurrentPositionIndex` at the cursor slot.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
   lazy snapshot subscription. Animates entering and leaving tiles only.

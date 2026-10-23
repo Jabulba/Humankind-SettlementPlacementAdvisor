@@ -8,8 +8,8 @@ A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place settlemen
 While the settlement placement cursor is active, the advisor marks the best tiles with stars and
 shows their FIMS yields as pins. The recommendation set is the placement neighborhood: the hovered
 territory plus the configured number of adjacency hops over every edge - sea, cliff, mountain and
-closed-border included - and every territory in it gets its own recommendations. City founding is
-left completely alone.
+closed-border included - and every territory in it gets its own recommendations. Camp placement and
+city founding are advised the same way, each through its own row of the mode-policy table.
 
 ## Features
 
@@ -19,8 +19,8 @@ left completely alone.
 - **Every adjacency edge is a hop**: sea, cliff, mountain and closed-border edges extend the
   recommendation range exactly like a land edge.
 - **Uses the game's own evaluation**, including its settlement score weighting.
-- **Safe around city founding**: cities keep their vanilla glyphs, pins and cursor, and any
-  settlement tail is released when a city session starts.
+- **City founding is advised too**: its row runs the same pipeline on the city session's own
+  evaluation, and a settlement tail left by a camp session is scrubbed when a city session starts.
 - **Configurable counts and range**, no external data files required.
 
 The advisor only makes recommendations. Normal placement rules still apply.
@@ -69,14 +69,14 @@ The default rules are:
 Every tile tied with the last recommended score is shown as well, so `TopHovered = 2` can show 3
 stars, and 4 when three tiles tie at rank 2.
 
-A tile gets no star when it is unexplored, water, not a valid settlement site for the mode, or
-its territory is at the edge of the world, claimed, or already hosts a settlement. Water is
-filtered per tile: sea-flagged territories can host valid camp sites, so the advisor never skips
-a territory for its ocean flag. The counts are mandatory rather than a minimum-FIMS filter:
-tiles below the vanilla minimum-FIMS threshold are still eligible, and a territory-border tile
-is no exception. The advisor does not filter on cost: a camp you cannot afford is still
-recommended, because the game's own placement gate reports money and influence as post-filter
-costs, not as placement validity.
+A tile gets no star when it is unexplored, water, not a valid settlement site for the mode, or its
+territory is one the mode's filter claims nothing on: the edge of the world in both wired modes,
+plus a claimed territory for camp placement. Water is filtered per tile: sea-flagged territories can
+host valid camp sites, so the advisor never skips a territory for its ocean flag. The counts are
+mandatory rather than a minimum-FIMS filter: tiles below the vanilla minimum-FIMS threshold are
+still eligible, and a territory-border tile is no exception. The advisor does not filter on cost: a
+camp or a city you cannot afford is still recommended, because the game's own placement gate reports
+money and influence as post-filter costs, not as placement validity.
 
 ## Configuration
 
@@ -96,45 +96,50 @@ BepInEx/config/com.jabulba.settlementplacementadvisor.cfg
 adds the territories adjacent to those. Every adjacency edge counts as a hop: sea, cliff, mountain
 and closed-border edges included. Values below 1 are clamped to 1.
 
-The tile under the mouse ghost is the advisor's own cursor slot: the mod writes it on every camp
-refresh, so the game's own hover highlight rule is skipped there, and a mode the mod has not taken
-over keeps the vanilla cursor and its hover highlight untouched.
+The tile under the mouse ghost is the advisor's own cursor slot: the mod writes it on every refresh
+of a mode it has taken over, so the game's own hover highlight rule is skipped there, and a mode the
+mod has not taken over keeps the vanilla cursor and its hover highlight untouched.
 
 ## How it works
 
-For camp placement the mod takes over the game's placement-snapshot sync
+For a placement mode the mode-policy table wires - camp placement and city founding - the mod takes
+over the game's placement-snapshot sync
 (`SettlementPlacementCursorSnapshot.EvaluatePlacement`): the advisor's own pipeline answers it
-and vanilla's full camp evaluation is never called from that snapshot. It then:
+and vanilla's full settlement evaluation is never called from that snapshot. It then:
 
-1. Dispatches on the stamped placement mode: the camp row runs the pipeline, any other mode
-   shows nothing and leaves its evaluation to vanilla.
-2. Asks the camp action's army-level gate; an army that cannot build a camp advises nothing.
+1. Dispatches on the stamped placement mode: a wired row runs the pipeline, and a mode the table
+   has not wired shows nothing and leaves its evaluation to vanilla.
+2. Asks the mode's army-level gate; an army that cannot build a camp, or found a city, advises
+   nothing.
 3. Scans the placement neighborhood: the hovered territory plus `RangeLevels` hops over every
    adjacency edge, every tile of every territory in it, with no reachability, zone-of-control,
    movement or cap rule in the way.
-4. Filters the claimable territories, then the tiles: water per tile, exploration, settlement
-   capability with the camp district definition, then the game's own tile gate with the
-   money/influence mask.
+4. Filters the claimable territories for the mode (camp: the map edge and any territory claimed or
+   carrying a settlement; city founding: the map edge and any territory carrying a settlement), then
+   the tiles: water per tile, exploration, settlement capability with the mode's district definition
+   (`CampDefinition` for camp, `CityCenterDefinition` for city founding), then the mode's own tile
+   gate with the money/influence mask.
 5. Scores each surviving tile with the game's own settlement evaluation - vanilla weights, and
    the resource-deposit exclusion vanilla applies - and admits the quota plus every tied tile per
    territory, using a per-territory cache keyed by the frames the rules read, the world claim
    frame included, so a claim, unclaim, owner steal, exploration or patrol change recomputes the
    territory it changed.
-6. Writes the admitted tiles into a fixed tail of the placement evaluation, each entry shown,
-   then publishes an immutable pick set for the presentation side. Each camp refresh also writes
-   the cursor slot - the hovered tile's own entry, with the camp action's failure flags and its
-   money, influence and unit costs - so the game's camp mouse marker and hovered-pin rule read
-   the advisor's facts. An unaffordable recommended tile looks exactly like an affordable one,
-   star and pin included: the cost failure appears only when the cursor is on it.
+6. Writes the admitted tiles into a fixed tail of that mode's evaluation, each entry shown,
+   then publishes an immutable pick set for the presentation side. Each refresh also writes
+   the cursor slot - the hovered tile's own entry, with the mode gate call's failure flags and its
+   money, influence and unit costs - so the game's mouse marker, the red ghost, and the hovered-pin
+   rule read the advisor's facts. An unaffordable recommended tile looks exactly like an affordable
+   one, star and pin included: the cost failure appears only when the cursor is on it.
 7. Renders a star on every published tile and answers the FIMS pin gate from the same set: a
    member shows its pin when the game's own hovered-tile rule allows it, and nothing else shows
    a pin. The game's generic pin filters (unexplored tiles, zero-yield tiles, off-screen
    culling) keep deciding which pins you see, so a member with no FIMS yield, or one outside
    the window, gets its star and no pin.
 
-All writes are restricted to `CreateCamp`. `FoundCity` and `FoundCityWithSettler` share the same
-evaluation type, which is why city sessions are a strict no-op: no stars, no pins, no glyph
-changes, and no cursor interference.
+Writes happen only through the active mode's advisor pipeline, into that mode's evaluation: the
+`CreateCamp` and `FoundCity` rows write their own session's evaluation, and an activation scrubs the
+tail a previous mode's session left on the shared evaluation. A mode the table has not wired writes
+nothing at all.
 
 ## Compatibility
 
@@ -156,8 +161,8 @@ Search for `SettlementPlacementAdvisor`.
 
 | Symptom | Check |
 |---|---|
-| No stars at all | Is the plugin loaded? Are you in settlement placement, not city founding? |
-| A territory has no stars | Tiles must be explored, unowned and non-water; claimed territories are skipped |
+| No stars at all | Is the plugin loaded? Is the placement mode a row the mode-policy table wires? |
+| A territory has no stars | Tiles must be explored and non-water, and the mode's territory filter must admit the territory |
 | No recommendations anywhere on this hover | Nothing displays when the neighborhood has nothing to advise: no stars, no pins, and no vanilla recommendations taking their place |
 | `Disabled, unresolved game members` | The game build changed; report the log and game version in an issue |
 | Nothing appears until the cursor moves | The mod wires star rendering on the first settlement placement refresh |
@@ -182,7 +187,7 @@ export GAMELIBS_PAT=$(gh auth token)   # token needs read:packages
 
 scripts/build-advisor.sh               # Release build, deploys to BepInEx/plugins
 scripts/test-range.sh                  # land-range harness
-scripts/test-noop.sh                   # city no-op / pin / tail contract
+scripts/test-noop.sh                   # write-side / pin / tail contract
 ```
 
 The build resolves the game directory from `-p:GameDir=...`, then `GAME_DIR`, then the standard

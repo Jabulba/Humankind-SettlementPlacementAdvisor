@@ -31,12 +31,13 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Puts picks into the settlement placement evaluation for the FIMS pins: the advisor-written
-    /// slots carry the shown set, so a published member is the entry's Showable flag and vanilla's
-    /// own entries keep their own glyphs. Settlement placement writes only: FoundCity and
-    /// FoundCityWithSettler share this evaluation type, so the mutating entry point guards on the
-    /// mode-policy row and a city activation only scrubs a tail left by an earlier settlement
-    /// session.
+    /// Puts picks into the placement evaluation the mode session is running, for the FIMS pins: the
+    /// advisor-written slots carry the shown set, so a published member is the entry's Showable flag
+    /// and vanilla's own entries keep their own glyphs. Writes happen only through the active mode's
+    /// advisor pipeline, into that mode's evaluation only (SPEC section 4): the city no-op contract
+    /// is retired, so the mutating entry points guard on the mode-policy row - a mode the table has
+    /// not wired writes nothing - and an activation releases the tail a previous mode's session left
+    /// on the shared evaluation, in every mode.
     ///
     /// Each evaluation gets one fixed tail window, reserved at its activation: TailStart is the
     /// cursor slot, and the advisor writes it itself on every refresh of a mode it has taken over,
@@ -88,19 +89,21 @@ namespace SettlementPlacementAdvisor
         /// Activation baseline (postfix on Initialize, simulation thread): vanilla's valid
         /// positions are final, so record the cursor slot and reserve the tail before refreshes
         /// start. SettleType is assigned before Initialize runs, so it is authoritative here. The
-        /// reserved window is zero-filled on the way in: the slots above the count the advisor owns
-        /// start as the shape vanilla skips.
+        /// activation releases the previous session's window first, in every mode: vanilla Initialize
+        /// only lowers ValidTileCount, so a settlement tail left by a camp session is exactly what a
+        /// city session would then score, and a tail is scrubbed, never merely counted down (SPEC
+        /// section 6 row 4). The reserved window is zero-filled on the way in: the slots above the
+        /// count the advisor owns start as the shape vanilla skips.
         /// </summary>
         public void NoteActivation(CampPlacementEvaluation evaluation)
         {
+            // Vanilla scores ValidTiles[0..Length), not [0..ValidTileCount), and skips only entries
+            // under 25 FIMS, so a surviving tail competes with the mode that follows. Release it
+            // before any mode re-baselines, including this writer's own mode.
+            ReleaseTail(evaluation);
+
             if (!ModePolicy.IsWired(evaluation.SettleType))
-            {
-                // Vanilla scores ValidTiles[0..Length), not [0..ValidTileCount), and skips only
-                // entries under 25 FIMS, so surviving settlement picks would compete with real city
-                // candidates. Scrub the tail an earlier settlement session left on this evaluation.
-                ReleaseTail(evaluation);
-                return;
-            }
+                return; // no row in the mode-policy table: vanilla's mode, vanilla's evaluation
 
             var window = WindowFor(evaluation);
             window.TailStart = evaluation.ValidTileCount;
@@ -128,8 +131,9 @@ namespace SettlementPlacementAdvisor
 
         /// <summary>
         /// The activation baseline in a taken-over mode. Vanilla's full settlement evaluation was
-        /// the only Initialize caller in camp mode (SimulationEvaluator.cs:2332); with the
-        /// takeover replacing it, the advisor runs Initialize itself over an empty candidate area.
+        /// the only Initialize caller in a wired mode (SimulationEvaluator.cs:2332, the settlement
+        /// and city founding branches); with the takeover replacing it, the advisor runs Initialize
+        /// itself over an empty candidate area.
         /// The Initialize postfix then reserves the tail from this baseline, and the best-camp
         /// arrays come back all -1, which is how the retired best-of-2 cascade leaves them.
         /// </summary>
@@ -149,19 +153,19 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Rewrite the tail for one refresh (simulation thread): the cursor slot first, from the
-        /// advisor's unmasked gate call - the failure flags and the cost trio land on the
-        /// evaluation, where the camp mouse marker, the territory highlight, the camp mouse marker
+        /// Rewrite the tail for one refresh of a wired mode (simulation thread): the cursor slot
+        /// first, from the advisor's unmasked gate call - the failure flags and the cost trio land
+        /// on the evaluation, where the ghost, the territory highlight, the settlement mouse marker
         /// and vanilla's hovered-pin rule read them, and the entry is the hovered tile's own scored
         /// record with no glyph - then each member's pick slot, written Showable, so the glyph set
         /// is the published membership. Slots this refresh released, and every slot above the count,
         /// are zeroed. The cursor index points at the cursor slot; the no-entry shape points it at
-        /// nothing. Non-settlement evaluations return without writing.
+        /// nothing. A mode the mode-policy table has not wired returns without writing.
         /// </summary>
         public void Write(CampPlacementEvaluation evaluation, Pick[] picks, CursorSlot cursor)
         {
             if (!ModePolicy.IsWired(evaluation.SettleType))
-                return;
+                return; // no row in the mode-policy table: the mode's evaluation stays vanilla's
 
             var window = WindowFor(evaluation);
             var tiles = evaluation.ValidTiles;
@@ -239,9 +243,11 @@ namespace SettlementPlacementAdvisor
 
         /// <summary>
         /// Release the whole window this advisor reserved on this evaluation, cursor slot included,
-        /// and let the next activation re-baseline. Needed on a mode switch because Write keeps its
-        /// entries, and vanilla Initialize never zeroes them. Zeroed entries are skipped by vanilla;
-        /// no-op when no tail was reserved.
+        /// and let the next activation re-baseline. Every activation calls it, in every mode,
+        /// because Write keeps its entries and vanilla Initialize never zeroes them: a settlement
+        /// tail left by a camp session is scrubbed on the city activation, and the city tail is
+        /// scrubbed on the next settlement one. Zeroed entries are skipped by vanilla; no-op when
+        /// no tail was reserved.
         /// </summary>
         private void ReleaseTail(CampPlacementEvaluation evaluation)
         {
@@ -261,7 +267,7 @@ namespace SettlementPlacementAdvisor
                     flags[i] = DistrictPlacementConditionFlags.None;
             }
 
-            window.TailStart = -1; // the next settlement activation re-baselines
+            window.TailStart = -1; // the next activation re-baselines
         }
 
         private TailWindow WindowFor(CampPlacementEvaluation evaluation)

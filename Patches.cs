@@ -37,10 +37,11 @@ namespace SettlementPlacementAdvisor
 
             try
             {
-                // Vanilla's full settlement evaluation was the only Initialize caller in camp
-                // mode (SimulationEvaluator.cs:2332), and the takeover replaces it, so the advisor
-                // runs vanilla's activation here: the baseline, the tail window, and the retired
-                // best-camp arrays all come from that call (SPEC section 1 row 5).
+                // Vanilla's full settlement evaluation was the only Initialize caller in a wired
+                // mode (SimulationEvaluator.cs:2332, the settlement and city founding branches), and
+                // the takeover replaces it, so the advisor runs vanilla's activation here: the
+                // baseline, the tail window, and the retired best-camp arrays all come from that call
+                // (SPEC section 1 row 5).
                 plugin.Writer.ReserveBaseline(placementEvaluation);
                 plugin.Advisor.RunScanPass(placementEvaluation, CursorTileOf(__instance), settlementGuid);
             }
@@ -49,7 +50,7 @@ namespace SettlementPlacementAdvisor
                 plugin.Advisor.Deactivate(); // failure path: INACTIVE, no writes, no vanilla fallback
                 GameApi.Fail("EvaluatePlacement takeover: " + e.Message);
             }
-            return false; // vanilla's full camp evaluation is never called from this snapshot
+            return false; // vanilla's full settlement evaluation is never called from this snapshot
         }
 
         /// <summary>
@@ -138,9 +139,10 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Simulation thread: after Initialize, vanilla's valid positions are final. This is the
-    /// only safe window to reserve the writer's tail before the cursor starts refreshing.
-    /// Initialize is shared with city founding, which the writer ignores.
+    /// Simulation thread: after Initialize, vanilla's valid positions are final. This is the only
+    /// safe window to release the tail a previous session left and reserve the writer's new window
+    /// before the cursor starts refreshing. Initialize is shared by every placement mode, and every
+    /// mode's activation runs through here.
     /// </summary>
     [HarmonyPatch]
     internal static class EvaluationActivationPatch

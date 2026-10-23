@@ -47,28 +47,34 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// The mode-policy table (SPEC section 3): which mode the pipeline runs, and the territory
-    /// filter that mode evaluates. A mode the table has not wired fails closed: the advisor
-    /// advises nothing and vanilla stays in charge.
+    /// The mode-policy table (SPEC section 3): which mode the pipeline runs, the territory filter
+    /// that mode evaluates, and the district definition and gates its row names. A mode the table
+    /// has not wired fails closed: the advisor advises nothing and vanilla stays in charge.
     /// </summary>
     internal static class ModePolicy
     {
-        /// <summary>The wired rows of the table. Camp only in this slice; the city rows come
-        /// with the city modes, and anything else fails closed.</summary>
+        /// <summary>The wired rows of the table: settlement placement and city founding. The
+        /// settler row and anything unmapped fail closed.</summary>
         public static bool IsWired(ArmyActionType mode)
         {
-            return mode == ArmyActionType.CreateCamp;
+            return mode == ArmyActionType.CreateCamp || mode == ArmyActionType.FoundCity;
         }
 
         /// <summary>
         /// Claimable territory for the mode. Camp row: drop IsEdgeOfTheWorld
         /// (ArmyActionHelper.cs:510-514) and drop (Claimed || SettlementGUID != 0) (515-518).
+        /// FoundCity row: drop IsEdgeOfTheWorld (645-648) and drop SettlementGUID != 0 (649-652) -
+        /// the city gate puts no Claimed term on it, so a territory claimed with no settlement on it
+        /// is claimable for a city. An unwired mode claims nothing.
         /// Never a filter: the territory ocean flag, AnyClaimableTile, DemilitarizedByEmpireIndex,
         /// close-border bits.
         /// </summary>
         public static bool IsTerritoryClaimable(ArmyActionType mode, TerritoryFacts facts)
         {
-            return !facts.IsEdgeOfTheWorld && !facts.Claimed && !facts.HasSettlement;
+            if (facts.IsEdgeOfTheWorld) return false;
+            if (mode == ArmyActionType.CreateCamp) return !facts.Claimed && !facts.HasSettlement;
+            if (mode == ArmyActionType.FoundCity) return !facts.HasSettlement;
+            return false; // no row in the table: fail closed
         }
     }
 
