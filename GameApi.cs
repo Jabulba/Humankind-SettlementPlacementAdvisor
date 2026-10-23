@@ -9,7 +9,6 @@ using Amplitude.Mercury.Simulation; // SimulationEntityGUID
 using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency (the snapshot's territory edges)
 using AiSnapshots = Amplitude.Mercury.Interop.AI.Snapshots; // public AI snapshot: territory graph
 using SnapshotTerritory = Amplitude.Mercury.Interop.AI.Entities.Territory; // snapshot territory entity
-using HarmonyLib;
 
 namespace SettlementPlacementAdvisor
 {
@@ -169,6 +168,30 @@ namespace SettlementPlacementAdvisor
 
         public bool Ready => ReadyStatic;
 
+        /// <summary>
+        /// Reflection flags for every member the surface binds: the game's simulation internals are
+        /// internal and private, and the members read off a live object include properties.
+        /// </summary>
+        private const BindingFlags MemberFlags = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static;
+
+        /// <summary>
+        /// Type lookup by full name over the loaded assemblies. The startup probe binds with plain
+        /// reflection, never Harmony's AccessTools: the load gate is the mod's own contract, and it
+        /// has to run wherever the surface is exercised - the game's Mono runtime and the net10
+        /// harnesses (the shipped 0Harmony build's AccessTools initializer is Mono-specific).
+        /// Open generic names (ArrayWithFrame`1) match their full name here.
+        /// </summary>
+        private static Type FindType(string fullName)
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var type = assembly.GetType(fullName, false);
+                if (type != null) return type;
+            }
+            return null;
+        }
+
         public static void Resolve()
         {
             var failures = new List<string>();
@@ -177,14 +200,11 @@ namespace SettlementPlacementAdvisor
                 var fields = new Dictionary<string, FieldInfo>();
                 var methods = new Dictionary<string, MethodInfo>();
                 var members = new Dictionary<string, MemberInfo>();
-                var armyType = AccessTools.TypeByName(ArmyTypeName);
+                var armyType = FindType(ArmyTypeName);
 
                 foreach (var binding in s_Bindings)
                 {
-                    var owner = AccessTools.TypeByName(binding.TypeName);
-                    // AccessTools.TypeByName resolves a concrete type name; the members the
-                    // adapter reads off a live object are inherited, and a generic base resolves
-                    // only through an instantiated derived type (see FindInheritedMember).
+                    var owner = FindType(binding.TypeName);
                     if (owner == null)
                     {
                         failures.Add(binding.Label);
@@ -195,7 +215,7 @@ namespace SettlementPlacementAdvisor
 
                     if (binding.Shape == null)
                     {
-                        var field = AccessTools.Field(owner, binding.Member);
+                        var field = owner.GetField(binding.Member, MemberFlags);
                         if (field == null) failures.Add(binding.Label);
                         else fields[binding.Label] = field;
                         continue;
@@ -752,8 +772,10 @@ namespace SettlementPlacementAdvisor
         {
             for (var type = owner; type != null; type = type.BaseType)
             {
-                var member = (MemberInfo) AccessTools.Field(type, name) ?? AccessTools.Property(type, name);
-                if (member != null) return member;
+                var field = type.GetField(name, MemberFlags);
+                if (field != null) return field;
+                var property = type.GetProperty(name, MemberFlags);
+                if (property != null) return property;
             }
             return null;
         }
