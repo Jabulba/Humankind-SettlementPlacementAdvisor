@@ -40,8 +40,8 @@ namespace SettlementPlacementAdvisor
 
         /// <summary>
         /// Scan-pass entry, at the EvaluatePlacement takeover (SPEC section 1): the pass that fills
-        /// the per-territory cache and publishes the admission set. It writes no evaluation - the
-        /// write belongs to the refresh, which serves from the cache.
+        /// the per-territory cache and publishes the admission set for the cursor territory. It
+        /// writes no evaluation - the write belongs to the refresh, which serves from the cache.
         /// </summary>
         public void RunScanPass(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
@@ -57,8 +57,9 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Per-refresh entry (the UpdateCurrentPosition takeover): the admission set the pipeline
-        /// computed for the cursor territory, written into the tail and published. A zero-pick
+        /// Per-refresh entry (the UpdateCurrentPosition postfix, after vanilla's own refresh): the
+        /// admission set the pipeline computed for the cursor territory, written into the tail and
+        /// published. A zero-pick
         /// result deactivates - an ACTIVE empty set would suppress vanilla's pins without replacing
         /// them - and takes the advisor's tail contribution with it.
         /// </summary>

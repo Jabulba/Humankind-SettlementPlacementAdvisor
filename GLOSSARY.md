@@ -27,8 +27,9 @@ the domain and the modules at its seams.
   evaluates only what a moved frame changed. Deliberately narrow in this slice: the pass covers
   the hovered territory; the placement-neighborhood scan is the next slice.
 - **Refresh**: one pass of the placement snapshot sync. The advisor hooks both halves: the
-  takeover for the scan pass, and `UpdateCurrentPosition` for the per-cursor publish (its own
-  pipeline decides the refresh, so vanilla's append never runs and the writer owns the tail).
+  takeover for the scan pass, and vanilla's `UpdateCurrentPosition` as a postfix for the
+  per-cursor publish. Vanilla keeps running the refresh, so the cursor slot keeps its gate
+  result and cost trio; the advisor publishes the admission set on top of it.
 - **Hovered territory**: the territory owning the tile under the placement cursor. Level 1
   of the range.
 - **Range territories**: territories reachable from the hovered territory in the
@@ -54,12 +55,12 @@ the domain and the modules at its seams.
 - **Tail**: the fixed slot window in `CampPlacementEvaluation.ValidTiles` owned by the
   evaluation writer. The base slot is the cursor slot, reserved at the activation baseline the
   takeover runs vanilla's `Initialize` at; slots above it hold picks, rewritten in place at
-  invariant indices every refresh. For a wired mode vanilla's own append never runs, so the
-  writer owns the whole tail and keeps every slot outside the current admission set scrubbed to
-  -1. Vanilla entries are never moved. Because vanilla binds pins to array indices, stable slots
-  keep every retained pick bound; only the cursor tile's element changes within one pick set.
-  Vanilla scores the array's whole length, not the valid count, so a tail left by a mode switch
-  must be scrubbed, not just counted down.
+  invariant indices every refresh. Vanilla keeps running the refresh, and its hover append lands
+  above the reserved window; the writer keeps every slot inside the window outside the current
+  admission set scrubbed to -1, and never moves a vanilla entry. Because vanilla binds pins to
+  array indices, stable slots keep every retained pick bound; only the cursor tile's element
+  changes within one pick set. Vanilla scores the array's whole length, not the valid count, so a
+  tail left by a mode switch must be scrubbed, not just counted down.
 - **Placement neighborhood**: the set of territories the advisor scans: the hovered
   territory (level 1) plus `RangeLevels` hops over all adjacency edges, covering every
   tile of every territory in it. Sea, cliff, mountain and closed edges each count as a

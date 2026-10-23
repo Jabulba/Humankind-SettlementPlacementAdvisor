@@ -199,11 +199,11 @@ internal static class Program
         return sb.ToString();
     }
 
-    /// <summary>Drive the real settlement-evaluation prefix (the advisor's entry point per refresh).</summary>
+    /// <summary>Drive the real settlement-evaluation postfix (the advisor's entry point per refresh).</summary>
     private static void Refresh(CampPlacementEvaluation eval, int cursorTile)
     {
-        var prefix = typeof(SettlementEvaluationPatch).GetMethod("Prefix", BindingFlags.NonPublic | BindingFlags.Static);
-        prefix.Invoke(null, new object[] { eval, cursorTile, eval, new SimulationEntityGUID(1UL) });
+        var postfix = typeof(SettlementEvaluationPatch).GetMethod("Postfix", BindingFlags.NonPublic | BindingFlags.Static);
+        postfix.Invoke(null, new object[] { eval, cursorTile, new SimulationEntityGUID(1UL) });
     }
 
     /// <summary>
@@ -489,7 +489,6 @@ internal static class Program
         // reserves, and the best-of-2 cascade arrays stay retired.
         var scanEval = NewEvaluation(ArmyActionType.Ransack, baseline); // the takeover stamps the mode
         var scanSnapshot = CreateSnapshot();
-
         bool vanillaRuns = ScanPass(scanSnapshot, scanEval, ArmyActionType.CreateCamp, 131);
         Check("camp takeover skips vanilla's full camp evaluation", !vanillaRuns);
         Check("camp takeover stamps the mode on the evaluation", scanEval.SettleType == ArmyActionType.CreateCamp);

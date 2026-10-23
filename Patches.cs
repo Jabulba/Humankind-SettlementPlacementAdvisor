@@ -37,6 +37,10 @@ namespace SettlementPlacementAdvisor
 
             try
             {
+                // Vanilla's full settlement evaluation was the only Initialize caller in camp
+                // mode (SimulationEvaluator.cs:2332), and the takeover replaces it, so the advisor
+                // runs vanilla's activation here: the baseline, the tail window, and the retired
+                // best-camp arrays all come from that call (SPEC section 1 row 5).
                 plugin.Writer.ReserveBaseline(placementEvaluation);
                 plugin.Advisor.RunScanPass(placementEvaluation, CursorTileOf(__instance), settlementGuid);
             }
@@ -91,10 +95,9 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Simulation thread, per cursor refresh: the advisor's own pipeline decides this refresh -
-    /// vanilla's body is skipped, so no pick is appended to the evaluation and the writer owns
-    /// the whole tail, keeping it scrubbed to -1 outside the current admission set. Failures
-    /// publish INACTIVE and never write the evaluation.
+    /// Simulation thread, per cursor refresh: vanilla keeps running the refresh, and the advisor
+    /// publishes the admission set its pipeline computed for the cursor territory, writing it into
+    /// the evaluation tail. Failures publish INACTIVE and never write the evaluation.
     /// </summary>
     [HarmonyPatch]
     internal static class SettlementEvaluationPatch
@@ -104,21 +107,17 @@ namespace SettlementPlacementAdvisor
             return AccessTools.Method("Amplitude.Mercury.Interop.CampPlacementEvaluation:UpdateCurrentPosition");
         }
 
-        private static bool Prefix(CampPlacementEvaluation result, int cursorTile,
-            CampPlacementEvaluation placementEvaluation, SimulationEntityGUID armyGuid)
+        private static void Postfix(CampPlacementEvaluation __instance, int currentPositionTileIndex, SimulationEntityGUID armyGUID)
         {
-            // The advisor's append point: vanilla's own append (CampPlacementEvaluation.cs:267)
-            // never runs, so nothing here may append - slot TailStart is the cursor slot.
             try
             {
-                Plugin.Instance.Advisor.Run(placementEvaluation, cursorTile, armyGuid);
+                Plugin.Instance.Advisor.Run(__instance, currentPositionTileIndex, armyGUID);
             }
             catch (Exception e)
             {
                 Plugin.Instance.Advisor.Deactivate(); // failure path never writes the evaluation
-                GameApi.Fail("UpdateCurrentPosition prefix: " + e.Message);
+                GameApi.Fail("UpdateCurrentPosition postfix: " + e.Message);
             }
-            return false;
         }
     }
 
