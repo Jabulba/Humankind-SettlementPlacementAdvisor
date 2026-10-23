@@ -9,11 +9,12 @@ the domain and the modules at its seams.
 - **Placement mode**: the settlement action a session is running (`ArmyActionType`):
   `CreateCamp` for settlement placement, `FoundCity` and `FoundCityWithSettler` for city
   founding. All three share `CampPlacementEvaluation`, so the advisor's takeover sees city
-  sessions too. Contract: the mode-policy table wires `CreateCamp` and `FoundCity`; a wired mode
-  runs the advisor's pipeline with vanilla's full settlement evaluation skipped, writing only
-  into its own evaluation, and any other mode is left entirely to vanilla with an INACTIVE
-  publish. Every activation releases the whole region a previous mode's session reserved on the
-  shared evaluation (see Tail).
+  sessions too. Contract: the mode-policy table wires all three rows - `CreateCamp`, `FoundCity`
+  and `FoundCityWithSettler`. A wired mode runs the advisor's pipeline, with vanilla's full
+  settlement evaluation skipped, and writes through that mode's advisor pipeline into that mode's
+  evaluation only; any other mode is left entirely to vanilla with an INACTIVE publish. Every
+  activation releases the whole region a previous mode's session reserved on the shared
+  evaluation (see Tail).
 - **Takeover point**: `SettlementPlacementCursorSnapshot.EvaluatePlacement`, the snapshot sync
   that stamps the placement mode on the evaluation and asks vanilla's full settlement
   evaluation. For a wired mode the advisor answers there: it stamps the mode, reserves the
@@ -28,11 +29,13 @@ the domain and the modules at its seams.
   territories and evaluates only what a moved frame changed.
 - **Refresh**: one pass of the placement snapshot's per-cursor update. The advisor hooks both
   halves: the `EvaluatePlacement` takeover for the scan pass, and `UpdateCurrentPosition` as the
-  per-refresh takeover for the cursor slot and the publish. In a mode the advisor has taken over it
-  owns the refresh: vanilla's whole hover body, its append-one-tile rule and resize-by-10
-  included, is skipped, and the cursor slot's gate result and cost trio come from the advisor's
-  gate call with no mask. A mode it has not wired, and a surface that cannot answer, leave vanilla
-  running its own refresh - its own cursor entry included - with the advisor publishing INACTIVE.
+  per-refresh takeover for the cursor slot and the publish. Its pipeline runs on every
+  snapshot-sync refresh, and the scan work is cache-served: a mouse move costs cache hits plus at
+  most one newly entered territory. In a mode the advisor has taken over it owns the refresh:
+  vanilla's whole hover body, its append-one-tile rule and resize-by-10 included, is skipped, and
+  the cursor slot's gate result and cost trio come from the advisor's gate call with no mask. A
+  mode it has not wired, and a surface that cannot answer, leave vanilla running its own refresh -
+  its own cursor entry included - with the advisor publishing INACTIVE.
 - **Hovered territory**: the territory owning the tile under the placement cursor. Level 1 of the
   placement neighborhood.
 - **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
@@ -46,22 +49,25 @@ the domain and the modules at its seams.
   pick set. The only channel from the simulation thread to the presentation thread.
 - **Publish**: swap a new pick set into the volatile channel. Only a pick-content change
   publishes; identical content bumps no version. An INACTIVE publish is the advisor's
-  deactivation: in a mode the advisor owns it displays nothing - stars stop and no pin shows,
-  and no vanilla surface takes the advice's place. It is the only thing the advisor does on a
-  zero-pick result. On a placement mode it does not own, the mode keeps its vanilla surface,
-  pin gate included.
+  deactivation: it displays nothing - stars stop and no pin shows - in every mode the advisor
+  takes over, and no vanilla surface takes the advice's place. It is the only thing the advisor
+  does on a zero-pick result. On a placement mode it does not own, the mode keeps its vanilla
+  surface, pin gate included.
 - **Tail**: the slot window in `CampPlacementEvaluation.ValidTiles` owned by the evaluation
-  writer. The base slot is the cursor slot, reserved at the activation baseline the takeover runs
-  vanilla's `Initialize` at; slots above it hold picks, rewritten in place at invariant indices
-  every refresh. Its size comes from config at the activation - the worst-case admission set for
-  the configured `RangeLevels` and quotas, tie headroom included - and it grows on demand when a
-  bigger set is published, so the window is never a cap on admission. Vanilla keeps running the
-  refresh, and its hover append lands above the reserved window; the writer keeps every slot inside
-  the window outside the current admission set scrubbed to -1, zeroing the slots each refresh
-  releases, and never moves a vanilla entry or sweeps the array. Because vanilla binds pins to array
-  indices, stable slots keep every retained pick bound; only the cursor tile's element changes
-  within one pick set. Vanilla scores the array's whole length, not the valid count, so a tail left
-  by a mode switch must be scrubbed over the whole region ever reserved, not just counted down.
+  writer. The base slot is the cursor slot, advisor-owned: the advisor writes it itself on every
+  refresh of a mode it has taken over, and vanilla's append-one-tile hover rule is skipped with
+  the refresh body that housed it, so nothing lands above the reserved window. The window is
+  reserved at the activation baseline the takeover runs vanilla's `Initialize` at, and the slots
+  above the cursor slot hold picks, rewritten in place at invariant indices every refresh. Its
+  size comes from config at the activation - the worst-case admission set for the configured
+  `RangeLevels` and quotas, tie headroom included - and it grows on demand when a bigger set is
+  published, so the window is never a cap on admission. The writer keeps every slot inside the
+  window outside the current admission set scrubbed to -1, zeroing the slots each refresh
+  releases, and never moves a vanilla entry or sweeps the array. Because vanilla binds pins to
+  array indices, stable slots keep every retained pick bound; only the cursor tile's element
+  changes within one pick set. Vanilla scores the array's whole length, not the valid count, so a
+  tail left by a mode switch must be scrubbed over the whole region ever reserved, not just
+  counted down.
 - **Placement neighborhood**: the set of territories the advisor scans: the hovered
   territory (level 1) plus `RangeLevels` hops over all adjacency edges, covering every
   tile of every territory in it. Sea, cliff, mountain and closed edges each count as a
@@ -70,24 +76,27 @@ the domain and the modules at its seams.
   active mode's territory filter, so that mode's advisor scans it and admits from it. The camp
   row drops `IsEdgeOfTheWorld` and drops a territory that is claimed or already hosts a
   settlement; the FoundCity row drops `IsEdgeOfTheWorld` and drops only a territory that already
-  hosts a settlement, so a claimed territory with no settlement on it stays claimable for a city.
-  No row claims nothing. No row filters on the territory ocean flag, the claimability-adjacency
-  bits, the demilitarized zone, or close borders.
+  hosts a settlement, so a claimed territory with no settlement on it stays claimable for a city;
+  the settler row drops `IsEdgeOfTheWorld` and drops a settled territory except the placing
+  empire's own camp or pre-camp, which a settler replaces, so an own city or another empire's
+  settlement stays out. No row claims nothing. No row filters on the territory ocean flag, the
+  claimability-adjacency bits, the demilitarized zone, or close borders.
 - **Tile pre-filter**: the per-tile checks the mode runs on every tile of a claimable
   territory before asking the gate: water (per tile, never per territory), explored with the
   gate's any-bit visibility predicate, and terrain plus point-of-interest settlement capability
   read with the mode's district definition.
 - **Tile gate**: the mode's own placement validity call per tile (`ArmyActionHelper`'s
   `FillCreateCampFailures` tile overload for camp, `FillFoundCityFailures` position overload for
-  city founding), asked with the advisor's membership mask. The gate's costs are read and never
-  used for membership.
+  city founding, `FillSettlerAbilityFailures` for city founding with a settler), asked with the
+  advisor's membership mask. The gate's costs are read and never used for membership.
 - **Membership mask**: the gate mask `{NotEnoughMoney, NotEnoughInfluence}`: money and
   influence failures are dropped, so an unaffordable tile stays admissible, and every other
   gate failure drops the tile. The mask is the only difference from vanilla's placement gate;
   there is no affordability pre-filter.
 - **Army-level gate**: the mode's army-side gate (`FillCreateCampFailures` for camp,
-  `FillFoundCityFailures` for city founding), asked once per scan pass before any tile. Any hit
-  skips the scan entirely and publishes INACTIVE.
+  `FillFoundCityFailures` for city founding, `FillSettlerAbilityFailures` for city founding with
+  a settler), asked once per scan pass before any tile. Any hit skips the scan entirely and
+  publishes INACTIVE.
 - **Admission set**: one territory's recommended tiles: rank the surviving scored tiles by
   score descending, tile index ascending, then take the territory's quota plus the full top tie
   set. No FIMS floor, no territory-border rule, no distance tie-break, no tie cap, no star cap.
@@ -111,25 +120,26 @@ the domain and the modules at its seams.
 
 - **Pick computation** (`PickComputation`): the rules, in SPEC order: army-level gate, the
   mode's territory filter, tile pre-filter, tile gate with the membership mask, scoring on the
-  game's own settlement weight table with the resource-tile exclusion kept, then admission.
-  Cursor context + game surface in, ordered unique picks out (null = game facts unavailable,
-  empty = nothing survived). Scans the whole placement neighborhood. Owns the per-territory cache -
+  game's own settlement weight table with the resource-tile exclusion kept, then admission: the
+  clamped quota plus the full top tie set. Cursor context + game surface in, ordered unique picks
+  out (null = game facts unavailable, empty = nothing survived). Scans the whole placement
+  neighborhood. Owns the per-territory cache -
   keyed by territory, quota, empire, placement mode, every frame it reads (the world claim frame
   included), and the territory's own claim stamp, so a claim, unclaim, owner steal, exploration or
   patrol change recomputes only the territory it changed (frames are read from the game surface at
   compute time, never threaded by callers) - plus count clamping, ranking, and admission. No side
-  effects, no writes, no budget, no cap, no truncation.
+  effects and no writes.
 - **Game surface** (`GameSurface`): the seam over the game's internals: tile
-  settlement capability, per-tile water, exploration, per-tile placement evaluation, frame
-  counters, army lookup, and the territory graph (territory of a tile, claimed flag,
-  settlement-site tiles, and the placement-neighborhood relation: every adjacency edge, sea, cliff,
-  mountain and closed-border included, with no transition filter). The adapter (`GameApi`) satisfies
-  it in the game: reflection for the simulation internals, the public AI snapshot for the territory
-  graph. Water is a per-tile fact: sea-flagged territories can host valid camp sites, so the advisor
-  never filters by the territory ocean flag. Territory facts fail closed: an unknown territory never
-  advises, and an unknown edge set degrades the scan to the territories it has reached. The gates
-  come from the same `ArmyActionHelper` calls the game's own placement actions use, per mode, and the
-  startup probe checks every member by name.
+  settlement capability, per-tile water, exploration with the gate's any-bit predicate, per-tile
+  placement evaluation, frame counters, army lookup, and the territory graph (territory of a tile,
+  claimed flag, settlement-site tiles, and the placement-neighborhood relation: every adjacency
+  edge, sea, cliff, mountain and closed-border included, with no transition filter). The adapter
+  (`GameApi`) satisfies it in the game: reflection for the simulation internals, the public AI
+  snapshot for the territory graph. Water is a per-tile fact: sea-flagged territories can host
+  valid camp sites, so the advisor never filters by the territory ocean flag. Territory facts fail
+  closed: an unknown territory never advises, and an unknown edge set degrades the scan to the
+  territories it has reached. The gates come from the same `ArmyActionHelper` calls the game's own
+  placement actions use, per mode, and the startup probe checks every member by name.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the evaluation of the mode the session
   is running, and only into that evaluation: the mutating entry points guard on `SettleType`, so a
   mode the mode-policy table has not wired writes nothing. One window per evaluation instance - the

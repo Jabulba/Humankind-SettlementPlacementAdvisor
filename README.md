@@ -8,8 +8,11 @@ A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place settlemen
 While the settlement placement cursor is active, the advisor marks the best tiles with stars and
 shows their FIMS yields as pins. The recommendation set is the placement neighborhood: the hovered
 territory plus the configured number of adjacency hops over every edge - sea, cliff, mountain and
-closed-border included - and every territory in it gets its own recommendations. Camp placement and
-city founding are advised the same way, each through its own row of the mode-policy table.
+closed-border included - and every territory in it gets its own recommendations. The hovered
+territory gets its admission quota, every other territory in the placement neighborhood gets that
+quota plus every tile tied with the last admitted score, and all three settlement modes - camp
+placement, city founding, and city founding with a settler - are advised the same way, each through
+its own row of the mode-policy table.
 
 ## Features
 
@@ -17,10 +20,11 @@ city founding are advised the same way, each through its own row of the mode-pol
 - **Stars and pins are one set**: every recommended tile gets a star, and its FIMS pin shows
   when the game's own pin rules allow it.
 - **Every adjacency edge is a hop**: sea, cliff, mountain and closed-border edges extend the
-  recommendation range exactly like a land edge.
+  placement neighborhood exactly like a land edge.
 - **Uses the game's own evaluation**, including its settlement score weighting.
-- **City founding is advised too**: its row runs the same pipeline on the city session's own
-  evaluation, and a settlement tail left by a camp session is scrubbed when a city session starts.
+- **All three settlement modes are advised**: camp placement, city founding and city founding
+  with a settler each run the pipeline on their own session's evaluation, and a settlement tail
+  left by one mode's session is scrubbed when a session switches mode.
 - **Configurable counts and range**, no external data files required.
 
 The advisor only makes recommendations. Normal placement rules still apply.
@@ -54,24 +58,26 @@ Typical plugin locations:
 
 ## Usage
 
-1. Select an army and start **settlement placement**.
+1. Select an army and start **settlement placement**, **city founding**, or **city founding with
+   a settler**.
 2. Hover over a territory. Recommended tiles are marked with stars.
 3. Check the FIMS pins to compare the candidates.
 4. Place the settlement on the tile you prefer. The advisor does not restrict your choice.
 
 The default rules are:
 
-| Territory | Recommendations |
-|---|---|
-| Hovered territory | Top 2 tiles |
-| Each other territory in the neighborhood | Top 1 tile |
+| Territory | Admission quota | Recommendations |
+|---|---:|---|
+| Hovered territory | 2 | The top 2 tiles, plus every tile tied with the last admitted score |
+| Each other territory in the neighborhood | 1 | The top tile, plus every tile tied with the last admitted score |
 
 Every tile tied with the last recommended score is shown as well, so `TopHovered = 2` can show 3
 stars, and 4 when three tiles tie at rank 2.
 
 A tile gets no star when it is unexplored, water, not a valid settlement site for the mode, or its
-territory is one the mode's filter claims nothing on: the edge of the world in both wired modes,
-plus a claimed territory for camp placement. Water is filtered per tile: sea-flagged territories can
+territory is one the mode's filter claims nothing on: the edge of the world in all three wired
+modes, plus a claimed territory for camp placement, and a settled territory for city founding
+except the camp a settler replaces. Water is filtered per tile: sea-flagged territories can
 host valid camp sites, so the advisor never skips a territory for its ocean flag. The counts are
 mandatory rather than a minimum-FIMS filter: tiles below the vanilla minimum-FIMS threshold are
 still eligible, and a territory-border tile is no exception. The advisor does not filter on cost: a
@@ -86,16 +92,25 @@ The config file lives at:
 BepInEx/config/com.jabulba.settlementplacementadvisor.cfg
 ```
 
-| Setting | Default | Meaning |
-|---|---:|---|
-| `TopHovered` | `2` | Admission quota on the hovered territory |
-| `TopNeighbour` | `1` | Admission quota on every other territory in the placement neighborhood |
-| `RangeLevels` | `2` | Placement-neighborhood hops; the hovered territory counts as level 1 |
+| Knob | Type | Default | Bounds | Semantics |
+|---|---|---:|---|---|
+| `TopHovered` | int | `2` | >= 1, clamped | Per-territory admission quota on the hovered territory: mandatory minimum count plus the full top tie set |
+| `TopNeighbour` | int | `1` | >= 1, clamped | Same quota semantics on every other territory in the placement neighborhood; 0 not allowed, no hovered-only display |
+| `RangeLevels` | int | `2` | >= 1, no upper bound | Placement-neighborhood hop count over all adjacency types; the hovered territory counts as level 1 |
 
-`RangeLevels = 2` means the hovered territory plus the territories adjacent to it. `RangeLevels = 3`
-adds the territories adjacent to those. Every adjacency edge counts as a hop: sea, cliff, mountain
-and closed-border edges included. All three settings are integers with a minimum of 1: values below 1
-are clamped to 1, and `RangeLevels` has no upper bound.
+The config file carries these help strings:
+
+- `TopHovered`: "Admission quota on the hovered territory: this many tiles minimum, plus every
+  tile tied with the last admitted score."
+- `TopNeighbour`: "Admission quota on every other territory in the placement neighborhood: this
+  many tiles minimum, plus every tile tied with the last admitted score."
+- `RangeLevels`: "Placement-neighborhood hops from the hovered territory, the hovered territory
+  counts as level 1: 3 = hovered + adjacent + adjacent-to-adjacent. Every adjacency edge counts as
+  a hop: sea, cliff, mountain and closed-border edges included."
+
+All three settings are integers with a minimum of 1: values below 1 are clamped to 1, and
+`RangeLevels` has no upper bound. There are no other knobs: no score floor, no tie cap, no mode
+toggle and no master enable switch. Disabling the mod is the mod loader's job.
 
 The tile under the mouse ghost is the advisor's own cursor slot: the mod writes it on every refresh
 of a mode it has taken over, so the game's own hover highlight rule is skipped there, and a mode the
@@ -103,28 +118,29 @@ mod has not taken over keeps the vanilla cursor and its hover highlight untouche
 
 ## How it works
 
-For a placement mode the mode-policy table wires - camp placement and city founding - the mod takes
-over the game's placement-snapshot sync
+For a placement mode the mode-policy table wires - camp placement, city founding, and city founding
+with a settler - the mod takes over the game's placement-snapshot sync
 (`SettlementPlacementCursorSnapshot.EvaluatePlacement`): the advisor's own pipeline answers it
 and vanilla's full settlement evaluation is never called from that snapshot. It then:
 
 1. Dispatches on the stamped placement mode: a wired row runs the pipeline, and a mode the table
    has not wired shows nothing and leaves its evaluation to vanilla.
-2. Asks the mode's army-level gate; an army that cannot build a camp, or found a city, advises
-   nothing.
+2. Asks the mode's army-level gate; an army that cannot build a camp, found a city, or settle with
+   its settler advises nothing.
 3. Scans the placement neighborhood: the hovered territory plus `RangeLevels` hops over every
    adjacency edge, every tile of every territory in it, with no reachability, zone-of-control,
    movement or cap rule in the way.
 4. Filters the claimable territories for the mode (camp: the map edge and any territory claimed or
-   carrying a settlement; city founding: the map edge and any territory carrying a settlement), then
-   the tiles: water per tile, exploration, settlement capability with the mode's district definition
-   (`CampDefinition` for camp, `CityCenterDefinition` for city founding), then the mode's own tile
-   gate with the money/influence mask.
+   carrying a settlement; city founding: the map edge and any territory carrying a settlement;
+   settler: the map edge and any settled territory except the camp or pre-camp the settler
+   replaces), then the tiles: water per tile, exploration, settlement capability with the mode's
+   district definition (`CampDefinition` for camp, `CityCenterDefinition` for city founding and
+   for city founding with a settler), then the mode's own tile gate with the money/influence mask.
 5. Scores each surviving tile with the game's own settlement evaluation - vanilla weights, and
    the resource-deposit exclusion vanilla applies - and admits the quota plus every tied tile per
    territory, using a per-territory cache keyed by the frames the rules read, the world claim
    frame included, so a claim, unclaim, owner steal, exploration or patrol change recomputes the
-   territory it changed.
+   territory it changed. A mouse move costs cache hits plus at most the newly entered territory.
 6. Writes the admitted tiles into the tail of that mode's evaluation - a window sized at the
    activation from your `RangeLevels` and quotas, tie headroom included, and grown when a published
    set needs more slots - each entry shown,
@@ -144,6 +160,11 @@ Writes happen only through the active mode's advisor pipeline, into that mode's 
 an activation scrubs the whole region a previous mode's session reserved on the shared evaluation,
 so no settlement entry survives a mode switch as a phantom recommendation. A mode the table has not
 wired writes nothing at all.
+
+The advisor promises nothing about the legality of an advised tile: the game's own placement
+validators stay in charge, and an advised tile can still be rejected when you give the order (army
+overload, costs, a foreign army on arrival, state drift). Advice is a recommendation, never a
+guarantee.
 
 ## Compatibility
 
@@ -192,8 +213,9 @@ cd Humankind-SettlementPlacementAdvisor
 export GAMELIBS_PAT=$(gh auth token)   # token needs read:packages
 
 scripts/build-advisor.sh               # Release build, deploys to BepInEx/plugins
-scripts/test-range.sh                  # land-range harness
+scripts/test-range.sh                  # placement-neighborhood harness
 scripts/test-noop.sh                   # write-side / pin / tail contract
+scripts/test-scan.sh                   # scan-cost harness (the wide-scan performance bound)
 ```
 
 The build resolves the game directory from `-p:GameDir=...`, then `GAME_DIR`, then the standard
@@ -202,8 +224,8 @@ and prints a warning. BepInEx only loads plugins at process start, so restart th
 rebuild.
 
 The test harnesses are headless console applications and do not need a running game. They cover
-the real pick computation, the real land-adjacency filter, and the real patch entry points over
-synthetic territory graphs.
+the real pick computation, the real placement-neighborhood scan over every adjacency edge, the real
+patch entry points, and the scan cost, over synthetic territory graphs.
 
 For the commit standard, game-libs feed setup and release process, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -214,7 +236,7 @@ Bug reports and pull requests are welcome. Please include:
 
 - The game version.
 - The relevant `LogOutput.log` excerpt.
-- Whether the issue happens during settlement placement or city founding.
+- The placement mode: settlement placement, city founding, or city founding with a settler.
 - A clear description of the expected and actual recommendations.
 
 Commits follow the Conventional Commits format enforced by `scripts/hooks/commit-msg`; see

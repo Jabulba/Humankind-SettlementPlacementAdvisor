@@ -6,23 +6,24 @@ vocabulary, `CONTRIBUTING.md` the commit/release standard. Read those before cha
 
 ## Commands
 
-- `scripts/build-advisor.sh [msbuild args]` — Release build, then deploys the DLL to
+- `scripts/build-advisor.sh [msbuild args]` - Release build, then deploys the DLL to
   `$GAME_DIR/BepInEx/plugins` automatically (`CopyToPlugins`). Pass `-p:GameDir=...` or export
   `GAME_DIR`; if the install is missing the build *succeeds* but logs `NOT deployed`.
-- `scripts/test-range.sh` — placement-neighborhood harness. `scripts/test-noop.sh` — the
-  write-side, pin and tail contract.
+- `scripts/test-range.sh` - placement-neighborhood harness. `scripts/test-noop.sh` - the
+  write-side, pin and tail contract. `scripts/test-scan.sh` - the scan-cost harness, the wide-scan
+  performance bound (SPEC section 9).
   These are the whole test suite: plain console apps, no test framework, so `dotnet test` runs
   nothing. They have no case filter; running one runs all its cases (fast).
-- `scripts/launch-game.sh [--kill-first]` — Steam launch, waits for `Ready: advisor patches
+- `scripts/launch-game.sh [--kill-first]` - Steam launch, waits for `Ready: advisor patches
   active` in this boot's log. Restart the game after every rebuild; BepInEx loads only at start.
-- `scripts/decompile-game.sh [FullyQualifiedTypeName]` — ILSpy decompile under `reference/`
+- `scripts/decompile-game.sh [FullyQualifiedTypeName]` - ILSpy decompile under `reference/`
   (needs `ilspycmd`). Use it for vanilla-behavior facts; `reference/` is proprietary and must
   never be committed.
-- `scripts/gen-explorer.sh` — regenerate `reference/Explorer.sln` (IDE project over the
+- `scripts/gen-explorer.sh` - regenerate `reference/Explorer.sln` (IDE project over the
   decompiled trees: completion + navigation). Run after every full decompile; a handful
   of decompiler-artifact fixes live in the decompiled files and are listed in that
   script's header for re-application.
-- `scripts/gen-cfg.sh` — release cfg generation only; `scripts/publish-gamelibs.sh <build>` —
+- `scripts/gen-cfg.sh` - release cfg generation only; `scripts/publish-gamelibs.sh <build>` -
   repack game assemblies after a game update.
 - Runtime log: grep `SettlementPlacementAdvisor` in `$GAME_DIR/BepInEx/LogOutput.log`.
   `Plugin.Awake` exceptions appear only in the Proton prefix `Player.log`; a load failure also
@@ -34,7 +35,8 @@ Scripts assume the SDK at `~/.dotnet` and set `DOTNET_ROOT`/`PATH` themselves.
 
 - Restore pulls compile-time game assemblies from the private `Humankind.GameLibs` feed.
   `GAMELIBS_PAT` must have `read:packages`. The pin is exact (`[1.0.31.4851-r2]`); bump it in
-  **all four** csproj files (root, `rangecircuit`, `noopcircuit`, `cfggen`) when updating.
+  **all five** csproj files (root, `rangecircuit`, `noopcircuit`, `scancircuit`, `cfggen`) when
+  updating.
 - Per clone: `git config core.hooksPath scripts/hooks` and
   `git config commit.template .gitmessage`.
 - Expected noise: GameLibs produces `MSB3277` on the plugin build and `NU1701` in the net10
@@ -48,9 +50,9 @@ Simulation thread: `Patches.cs` → `Advisor` → `PickComputation` → `Evaluat
 seam and `GameApi` its reflection adapter.
 
 - **Writes happen only through the active mode's advisor pipeline, into that mode's evaluation.**
-  The mode-policy table wires `CreateCamp` and `FoundCity`; the three modes share
-  `CampPlacementEvaluation`, so a mode the table has not wired writes nothing and an activation
-  scrubs the tail the previous mode's session left. The write-side harness enforces this.
+  The mode-policy table wires `CreateCamp`, `FoundCity` and `FoundCityWithSettler`; the three modes
+  share `CampPlacementEvaluation`, so a mode the table has not wired writes nothing and an
+  activation scrubs the tail the previous mode's session left. The write-side harness enforces this.
 - `EvaluationWriter` owns a tail window in the shared `ValidTiles` array, sized from config at the
   activation and grown on demand. Write pick slots in place, barrier, then raise `ValidTileCount`;
   never move vanilla entries, never sweep the array, and zero only the slots a refresh releases. A
@@ -77,5 +79,5 @@ seam and `GameApi` its reflection adapter.
 Strict Conventional Commits (`type(scope)!: subject`), enforced by the hook and by push CI.
 Types/scopes are closed sets; `fix` requires a Cause/Fix/Ruled out/Verification body; max 72
 chars; no attribution trailers. Pushing `main`/opening a PR runs commit lint, the Release build,
-and both harnesses. Release = annotated `vX.Y.Z` tag; MinVer stamps the version, git-cliff
+and all three harnesses. Release = annotated `vX.Y.Z` tag; MinVer stamps the version, git-cliff
 generates notes. See `CONTRIBUTING.md` for the exact scopes and release steps.
