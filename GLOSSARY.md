@@ -22,8 +22,14 @@ the domain and the modules at its seams.
   evaluation is never called from the patched snapshot.
 - **Mode-policy table** (`ModePolicy`): the mode's row in one place: whether the pipeline runs
   for the mode at all (wired), the territory filter that mode evaluates, the district definition
-  it scores with, and its tile and army gates. A mode the table has not wired fails closed: no
-  rules run, the advisor publishes INACTIVE, and vanilla stays in charge of that mode's evaluation.
+  it scores with, and its tile and army gates named by the member names the startup probe binds,
+  each with its calling convention.
+  The table is the single source of mode dispatch: the surface adapter marshals whatever gate and
+  definition the row names and holds no mode switch of its own. The army gates run in the row's
+  order - the shared army-state rows first (`ArmyActionHelper.FillCommonArmyFailures`: decoy
+  `ActionProhibited`, `ArmyLockedByBattle`, `ArmyLocked`), then the mode's own army rows, which is
+  what vanilla's own gates assemble. A mode the table has not wired fails closed: no rules run,
+  the advisor publishes INACTIVE, and vanilla stays in charge of that mode's evaluation.
 - **Scan pass**: the advisor's full evaluation of the placement neighborhood for a cursor
   position, run at the takeover point and cache-served per territory: a refresh re-serves cached
   territories and evaluates only what a moved frame changed.
@@ -45,14 +51,20 @@ the domain and the modules at its seams.
   pick computation, minimum 1). Context in, picks out: a null return means the game
   facts were unavailable and the advisor deactivates.
 - **Pick set**: the published, immutable result of one pick computation: version, tiles
-  (ascending, unique), tile membership, and the entering/leaving diff against the previous
-  pick set. The only channel from the simulation thread to the presentation thread.
-- **Publish**: swap a new pick set into the volatile channel. Only a pick-content change
-  publishes; identical content bumps no version. An INACTIVE publish is the advisor's
-  deactivation: it displays nothing - stars stop and no pin shows - in every mode the advisor
-  takes over, and no vanilla surface takes the advice's place. It is the only thing the advisor
-  does on a zero-pick result. On a placement mode it does not own, the mode keeps its vanilla
-  surface, pin gate included.
+  (ascending, unique), tile membership, and the entering/leaving diff against the previous pick
+  set. It gains no fields: the presentation facts travel on the view.
+- **Presentation view** (`PresentationView.Current`): the advisor's only cross-thread channel -
+  one immutable, volatile, version-gated snapshot of everything presentation may read: the pick
+  set, the placement mode it was published for, and the cursor slot's unmasked gate answer
+  (`SettleFailure`). Inactive is a view with no pick set. The pin gate and the star renderer
+  answer from one captured read, never from the live evaluation's mutable fields.
+- **Publish**: swap one presentation view into the channel. Publish carries the tiles, the mode and
+  the cursor-slot answer together; identical presentation content bumps no version. An INACTIVE
+  publish is the advisor's deactivation: it displays nothing - stars stop and no pin shows - in
+  every mode the advisor takes over, and no vanilla surface takes the advice's place. It is the
+  only thing the advisor does on a zero-pick result, cursor deactivation publishes it for the mode
+  being left, and on a placement mode the advisor does not own the mode keeps its vanilla surface,
+  pin gate included.
 - **Tail**: the slot window in `CampPlacementEvaluation.ValidTiles` owned by the evaluation
   writer. The base slot is the cursor slot, advisor-owned: the advisor writes it itself on every
   refresh of a mode it has taken over, and vanilla's append-one-tile hover rule is skipped with
@@ -137,9 +149,11 @@ the domain and the modules at its seams.
   (`GameApi`) satisfies it in the game: reflection for the simulation internals, the public AI
   snapshot for the territory graph. Water is a per-tile fact: sea-flagged territories can host
   valid camp sites, so the advisor never filters by the territory ocean flag. Territory facts fail
-  closed: an unknown territory never advises, and an unknown edge set degrades the scan to the
-  territories it has reached. The gates come from the same `ArmyActionHelper` calls the game's own
-  placement actions use, per mode, and the startup probe checks every member by name.
+  closed: an unknown territory never advises, and an unknown edge set degrades the whole pass to
+  the hovered territory's admission set alone. The gates come from the same `ArmyActionHelper`
+  calls the game's own placement actions use, named per mode by the mode-policy table, and the
+  startup probe checks every member the mod reflects over by name - the gates and definitions, the
+  frame counters and vision bits, the snapshot's cursor fields, and every Harmony patch target.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the evaluation of the mode the session
   is running, and only into that evaluation: the mutating entry points guard on `SettleType`, so a
   mode the mode-policy table has not wired writes nothing. One window per evaluation instance - the
@@ -168,8 +182,9 @@ the domain and the modules at its seams.
 
 - Simulation thread: pick computation, evaluation writer, publish. No Unity object access.
 - Presentation thread: star renderer, pick canvas adapter, FIMS pin gate.
-- Crossing: one volatile reference swap to an immutable pick set. Presentation readers
-  capture the set once per pass and never query the live channel twice in one pass.
+- Crossing: one volatile reference swap to the immutable presentation view - pick set, mode and
+  cursor-slot answer. Presentation readers capture the view once per pass and never query the live
+  channel twice in one pass.
 - The evaluation array is shared by reference, not copied. The writer's publish order (write
   slots, barrier, raise count) keeps the ghost, the settle action and the pins coherent. The
   only index it repoints is `CurrentPositionIndex`, on the refresh that writes the cursor slot:

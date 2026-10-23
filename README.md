@@ -7,8 +7,8 @@ A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place settlemen
 
 While the settlement placement cursor is active, the advisor marks the best tiles with stars and
 shows their FIMS yields as pins. The recommendation set is the placement neighborhood: the hovered
-territory plus the configured number of adjacency hops over every edge - sea, cliff, mountain and
-closed-border included - and every territory in it gets its own recommendations. The hovered
+territory (level 1) plus `RangeLevels - 1` expansions beyond it, over every edge - sea, cliff,
+mountain and closed-border included - and every territory in it gets its own recommendations. The hovered
 territory gets its admission quota, every other territory in the placement neighborhood gets that
 quota plus every tile tied with the last admitted score, and all three settlement modes - camp
 placement, city founding, and city founding with a settler - are advised the same way, each through
@@ -125,11 +125,13 @@ and vanilla's full settlement evaluation is never called from that snapshot. It 
 
 1. Dispatches on the stamped placement mode: a wired row runs the pipeline, and a mode the table
    has not wired shows nothing and leaves its evaluation to vanilla.
-2. Asks the mode's army-level gate; an army that cannot build a camp, found a city, or settle with
-   its settler advises nothing.
-3. Scans the placement neighborhood: the hovered territory plus `RangeLevels` hops over every
-   adjacency edge, every tile of every territory in it, with no reachability, zone-of-control,
-   movement or cap rule in the way.
+2. Asks the mode's army-level gate - the shared army-state rows the game's own gates run (decoy,
+   battle lock, army lock) and then the mode's own army rows; an army that cannot build a camp,
+   found a city, or settle with its settler advises nothing.
+3. Scans the placement neighborhood: the hovered territory plus `RangeLevels - 1` expansions over
+   every adjacency edge, every tile of every territory in it, with no reachability, zone-of-control,
+   movement or cap rule in the way. An edge set the game cannot answer degrades the whole pass to
+   the hovered territory's recommendations alone.
 4. Filters the claimable territories for the mode (camp: the map edge and any territory claimed or
    carrying a settlement; city founding: the map edge and any territory carrying a settlement;
    settler: the map edge and any settled territory except the camp or pre-camp the settler
@@ -144,14 +146,16 @@ and vanilla's full settlement evaluation is never called from that snapshot. It 
 6. Writes the admitted tiles into the tail of that mode's evaluation - a window sized at the
    activation from your `RangeLevels` and quotas, tie headroom included, and grown when a published
    set needs more slots - each entry shown,
-   then publishes an immutable pick set for the presentation side. Each refresh also writes
-   the cursor slot - the hovered tile's own entry, with the mode gate call's failure flags and its
-   money, influence and unit costs - so the game's mouse marker, the red ghost, and the hovered-pin
-   rule read the advisor's facts. An unaffordable recommended tile looks exactly like an affordable
-   one, star and pin included: the cost failure appears only when the cursor is on it.
-7. Renders a star on every published tile and answers the FIMS pin gate from the same set: a
-   member shows its pin when the game's own hovered-tile rule allows it, and nothing else shows
-   a pin. The game's generic pin filters (unexplored tiles, zero-yield tiles, off-screen
+   then publishes it on the presentation view: the pick set, the mode it was published for, and the
+   cursor slot's gate answer. Each refresh also writes the cursor slot - the hovered tile's own
+   entry, with the mode gate call's failure flags and its money, influence and unit costs - so the
+   game's mouse marker, the red ghost, and the hovered-pin rule read the advisor's facts. An
+   unaffordable recommended tile looks exactly like an affordable one, star and pin included: the
+   cost failure appears only when the cursor is on it.
+7. Renders a star on every published tile and answers the FIMS pin gate from the same published
+   view: a member shows its pin when the game's own hovered-tile rule, read off the published
+   cursor-slot answer, allows it, and nothing else shows a pin.
+   The game's generic pin filters (unexplored tiles, zero-yield tiles, off-screen
    culling) keep deciding which pins you see, so a member with no FIMS yield, or one outside
    the window, gets its star and no pin.
 
