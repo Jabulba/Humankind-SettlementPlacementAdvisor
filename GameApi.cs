@@ -84,6 +84,7 @@ namespace SettlementPlacementAdvisor
         private const string ArmyEmpireIndex = "Army.EmpireIndex";
         internal const string SnapshotActionType = "SettlementPlacementCursorSnapshot.actionType";
         internal const string SnapshotCursorPosition = "ConstructiblePlacementCursorSnapshot.nextConstructiblePosition";
+        private const string SnapshotType = "Amplitude.Mercury.Interop.SettlementPlacementCursorSnapshot";
 
         private const string ArmyTypeName = "Amplitude.Mercury.Simulation.Army";
 
@@ -146,8 +147,8 @@ namespace SettlementPlacementAdvisor
             new NameBinding { Label = VisibilityFrame, TypeName = "Amplitude.Mercury.Simulation.VisibilityController", Member = "Frame", Shape = "member" },
             new NameBinding { Label = EmpireVisionBits, TypeName = "Amplitude.Mercury.Simulation.MajorEmpire", Member = "Bits", Shape = "member" },
             new NameBinding { Label = ArmyEmpireIndex, TypeName = ArmyTypeName, Member = "EmpireIndex", Shape = "member" },
-            new NameBinding { Label = SnapshotActionType, TypeName = "Amplitude.Mercury.Interop.SettlementPlacementCursorSnapshot", Member = "actionType", Shape = "member" },
-            new NameBinding { Label = SnapshotCursorPosition, TypeName = "Amplitude.Mercury.Interop.ConstructiblePlacementCursorSnapshot", Member = "nextConstructiblePosition", Shape = "member" },
+            new NameBinding { Label = SnapshotActionType, TypeName = SnapshotType, Member = "actionType", Shape = "member" },
+            new NameBinding { Label = SnapshotCursorPosition, TypeName = SnapshotType, Member = "nextConstructiblePosition", Shape = "member" },
         };
 
         /// <summary>
@@ -181,6 +182,9 @@ namespace SettlementPlacementAdvisor
                 foreach (var binding in s_Bindings)
                 {
                     var owner = AccessTools.TypeByName(binding.TypeName);
+                    // AccessTools.TypeByName resolves a concrete type name; the members the
+                    // adapter reads off a live object are inherited, and a generic base resolves
+                    // only through an instantiated derived type (see FindInheritedMember).
                     if (owner == null)
                     {
                         failures.Add(binding.Label);
@@ -200,8 +204,10 @@ namespace SettlementPlacementAdvisor
                     if (binding.Shape == "member")
                     {
                         // Field or property: the members the adapter reads off a live object.
-                        var member = (MemberInfo)AccessTools.Field(owner, binding.Member)
-                            ?? AccessTools.Property(owner, binding.Member);
+                        // Base types are walked, because the members a snapshot reads live on its
+                        // generic base (ConstructiblePlacementCursorSnapshot<T>), where a plain
+                        // name lookup on the concrete type finds nothing.
+                        var member = FindInheritedMember(owner, binding.Member);
                         if (member == null) failures.Add(binding.Label);
                         else members[binding.Label] = member;
                         continue;
@@ -730,6 +736,24 @@ namespace SettlementPlacementAdvisor
                     if (parameters[i].ParameterType != parameterTypes[i]) { match = false; break; }
                 }
                 if (match) return method;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The startup-bound member lookup: field or property, walking the base chain. The
+        /// snapshot's cursor member is declared on its generic base
+        /// (ConstructiblePlacementCursorSnapshot&lt;T&gt;), and a constructed generic type exposes
+        /// the fields its generic definition declares, so the walk reaches members a plain name
+        /// lookup on the concrete type cannot see. An unresolved member is the documented load
+        /// failure, never a mid-game fallback.
+        /// </summary>
+        private static MemberInfo FindInheritedMember(Type owner, string name)
+        {
+            for (var type = owner; type != null; type = type.BaseType)
+            {
+                var member = (MemberInfo) AccessTools.Field(type, name) ?? AccessTools.Property(type, name);
+                if (member != null) return member;
             }
             return null;
         }
