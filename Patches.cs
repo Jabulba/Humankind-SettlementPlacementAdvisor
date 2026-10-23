@@ -163,11 +163,14 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Presentation thread: FIMS-pin gate. Pins follow the published pick set: members on,
-    /// everything else off, answered from the captured set so pins do not flip per mouse move.
-    /// An inactive set (null, or Tiles == null) hands the gate back to vanilla. Vanilla's generic
-    /// pin filters (tile index, exploration, zero yields, on-screen culling) stay unoverridden.
-    /// The best-camp placement array is never read: it retires with vanilla's best-of-2 loop.
+    /// Presentation thread: the FIMS-pin gate, the shown set's second rendering. A published
+    /// member shows its pin when vanilla's hovered rule allows it, everything else is off, and an
+    /// inactive pick set shows no pin at all: no vanilla best-placement surface takes the
+    /// advisor's place. A placement mode the advisor does not own keeps vanilla's gate answer.
+    /// The gate answers from the captured set, so pins do not flip per mouse move. Vanilla's
+    /// generic pin filters (tile index, exploration, zero gains and losses, on-screen culling)
+    /// run above this hook in the unpatched chain, so a zero-yield or off-screen member gets its
+    /// star and no pin. The retired best-camp array is never read.
     /// </summary>
     [HarmonyPatch]
     internal static class SettlementPinsPatch
@@ -179,9 +182,41 @@ namespace SettlementPlacementAdvisor
 
         private static void Postfix(ref bool __result, DistrictPlacementEvaluation.ValidTile info)
         {
-            var set = PickSet.Current;
-            if (set == null || set.Tiles == null) return; // advisor inactive: vanilla gate
-            __result = set.Contains(info.TileIndex);
+            var evaluation = PresentationPlacement();
+            if (evaluation == null || !ModePolicy.IsWired(evaluation.SettleType))
+                return; // a mode the advisor does not own: vanilla's gate, vanilla's surface
+
+            var set = PickSet.Current; // captured once per gate pass
+            if (set == null || set.Tiles == null)
+            {
+                __result = false; // INACTIVE displays nothing
+                return;
+            }
+            __result = set.Contains(info.TileIndex) && HoveredRuleAllows(evaluation.SettleFailure);
+        }
+
+        /// <summary>
+        /// The placement evaluation vanilla's own gate reads: the snapshot's presentation
+        /// evaluation, the same object the takeover stamps its mode on. Null while no settlement
+        /// cursor snapshot exists, which leaves the gate vanilla's.
+        /// </summary>
+        private static CampPlacementEvaluation PresentationPlacement()
+        {
+            var snapshot = Snapshots.SettlementPlacementCursorSnapshot;
+            if (snapshot == null) return null;
+            var data = snapshot.PresentationData;
+            return data == null ? null : data.PlacementEvaluation;
+        }
+
+        /// <summary>
+        /// Vanilla's hovered-tile rule (SettlementPlacementPinsSubset.cs:29-33), read off the
+        /// cursor slot's gate result: pins are admitted unless that result reports a failure
+        /// other than NotEnoughInfluence.
+        /// </summary>
+        private static bool HoveredRuleAllows(ArmyActionFailureFlags settleFailure)
+        {
+            return settleFailure == ArmyActionFailureFlags.None
+                || settleFailure == ArmyActionFailureFlags_Part1.NotEnoughInfluence;
         }
     }
 }
