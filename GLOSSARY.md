@@ -22,21 +22,15 @@ the domain and the modules at its seams.
   for the mode at all (wired), and the territory filter that mode evaluates. A mode the table
   has not wired fails closed: no rules run, the advisor publishes INACTIVE, and vanilla stays
   in charge of that mode's evaluation.
-- **Scan pass**: the advisor's full evaluation of what a cursor position can settle, run at the
-  takeover point, cache-served per territory: a refresh re-serves cached territories and
-  evaluates only what a moved frame changed. Deliberately narrow in this slice: the pass covers
-  the hovered territory; the placement-neighborhood scan is the next slice.
+- **Scan pass**: the advisor's full evaluation of the placement neighborhood for a cursor
+  position, run at the takeover point and cache-served per territory: a refresh re-serves cached
+  territories and evaluates only what a moved frame changed.
 - **Refresh**: one pass of the placement snapshot sync. The advisor hooks both halves: the
   takeover for the scan pass, and vanilla's `UpdateCurrentPosition` as a postfix for the
   per-cursor publish. Vanilla keeps running the refresh, so the cursor slot keeps its gate
   result and cost trio; the advisor publishes the admission set on top of it.
-- **Hovered territory**: the territory owning the tile under the placement cursor. Level 1
-  of the range.
-- **Range territories**: territories reachable from the hovered territory in the
-  adjacency range (`RangeLevels`, center counts as 1), stepping over LAND edges only:
-  the game's territory adjacency array also carries sea, cliff, mountain and closed
-  edges, and those never count as a range step. The hovered territory is never a range
-  territory.
+- **Hovered territory**: the territory owning the tile under the placement cursor. Level 1 of the
+  placement neighborhood.
 - **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
   placement data the FIMS pins read.
 - **Cursor context**: the pick computation's full input for one refresh: hovered
@@ -100,19 +94,22 @@ the domain and the modules at its seams.
   mode's territory filter, tile pre-filter, tile gate with the membership mask, scoring on the
   game's own settlement weight table with the resource-tile exclusion kept, then admission.
   Cursor context + game surface in, ordered unique picks out (null = game facts unavailable,
-  empty = nothing survived). Owns the per-territory cache - keyed by territory, quota, empire,
-  placement mode, and every frame it reads, the world claim/exploration frame included (frames
-  are read from the game surface at compute time, never threaded by callers) - plus count
-  clamping, ranking, and admission. No side effects, no writes.
+  empty = nothing survived). Scans the whole placement neighborhood. Owns the per-territory cache -
+  keyed by territory, quota, empire, placement mode, every frame it reads (the world claim frame
+  included), and the territory's own claim stamp, so a claim, unclaim, owner steal, exploration or
+  patrol change recomputes only the territory it changed (frames are read from the game surface at
+  compute time, never threaded by callers) - plus count clamping, ranking, and admission. No side
+  effects, no writes, no budget, no cap, no truncation.
 - **Game surface** (`GameSurface`): the seam over the game's internals: tile
   settlement capability, per-tile water, exploration, per-tile placement evaluation, frame
   counters, army lookup, and the territory graph (territory of a tile, claimed flag,
-  settlement-site tiles, land adjacencies). The adapter (`GameApi`) satisfies it in the game:
-  reflection for the simulation internals, the public AI snapshot for the territory graph (its
-  land filter keeps the `Open` transition edges). Water is a per-tile fact: sea-flagged
-  territories can host valid camp sites, so the advisor never filters by the territory ocean
-  flag. Territory facts fail closed: an unknown territory never advises. The gates come from
-  the same `ArmyActionHelper` calls the game's own placement actions use, per mode, and the
+  settlement-site tiles, and the placement-neighborhood relation: every adjacency edge, sea, cliff,
+  mountain and closed-border included, with no transition filter). The adapter (`GameApi`) satisfies
+  it in the game: reflection for the simulation internals, the public AI snapshot for the territory
+  graph. Water is a per-tile fact: sea-flagged territories can host valid camp sites, so the advisor
+  never filters by the territory ocean flag. Territory facts fail closed: an unknown territory never
+  advises, and an unknown edge set degrades the scan to the territories it has reached. The gates
+  come from the same `ArmyActionHelper` calls the game's own placement actions use, per mode, and the
   startup probe checks every member by name.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
   evaluation. Reserves the activation baseline at the takeover (vanilla's `Initialize`, the

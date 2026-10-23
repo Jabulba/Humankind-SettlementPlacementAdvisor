@@ -4,6 +4,7 @@ using Amplitude; // FixedPoint (namespace Amplitude, assembly Amplitude.Framewor
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType.
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation;
+using SnapshotTerritory = Amplitude.Mercury.Interop.AI.Entities.Territory; // placement-neighborhood edges
 
 namespace SettlementPlacementAdvisor
 {
@@ -76,15 +77,22 @@ namespace SettlementPlacementAdvisor
     /// GameSurface and returns ascending, unique picks (null = game facts unavailable).
     ///
     /// Pipeline per scan pass (SPEC section 2): mode dispatch, the army-level gate once per pass,
-    /// then per territory the mode's territory filter, the tile pre-filter (water, explored with
-    /// the gate's any-bit predicate, terrain + POI with the mode's district definition), the mode's
-    /// tile gate with the money/influence mask, scoring on the vanilla weight table with the
-    /// resource-tile exclusion kept, and admission as the clamped quota plus the full top tie set.
+    /// then per territory of the placement neighborhood the mode's territory filter, the tile
+    /// pre-filter (water, explored with the gate's any-bit predicate, terrain + POI with the
+    /// mode's district definition), the mode's tile gate with the money/influence mask, scoring on
+    /// the vanilla weight table with the resource-tile exclusion kept, and admission as the clamped
+    /// quota plus the full top tie set.
     ///
-    /// Deliberately narrow in this slice: the scan covers the hovered territory only; the
-    /// placement-neighborhood scan is the next slice. The per-territory cache is keyed by
-    /// territory, top count, empire, placement mode, and the frames read here (including the
-    /// world claim/exploration frame); callers never thread frames. Rules: README.md.
+    /// The placement neighborhood is the hovered territory (level 1) plus RangeLevels hops over
+    /// every adjacency edge the placement-neighborhood relation reports: sea, cliff, mountain and
+    /// closed-border edges each count as a hop, with no transition filter, no reachability, no
+    /// movement points, no zone of control, no cap, no budget and no truncation. Unknown
+    /// adjacency degrades the pass to the territories it has already reached and logs the surface
+    /// failure. The per-territory cache is keyed by territory, top count, empire, placement mode,
+    /// the frames read here (the world claim frame included), and the territory's own claim stamp:
+    /// a claim-frame bump recomputes only the territory whose claim facts moved, and a mouse move
+    /// costs cache hits plus the territories newly entering the neighborhood. Callers never thread
+    /// frames. Rules: README.md.
     /// </summary>
     internal sealed class PickComputation
     {
@@ -99,6 +107,14 @@ namespace SettlementPlacementAdvisor
             public int TerritoryFrame;
         }
 
+        /// <summary>
+        /// One territory's cached admission set with everything that can invalidate it: the
+        /// global frames, the quota, the empire, the placement mode, the world claim frame, and
+        /// the territory's own claim stamp (SPEC section 2, cadence and cache). The stamp keeps a
+        /// claim, unclaim, owner steal, exploration or patrol change scoped to the territory it
+        /// changed: a claim-frame bump re-runs the tile work of a territory only when that
+        /// territory's own claim facts moved.
+        /// </summary>
         private struct CacheEntry
         {
             public Pick[] Picks;
@@ -109,12 +125,23 @@ namespace SettlementPlacementAdvisor
             public int TerritoryFrame;
             public int EmpireIndex;
             public ArmyActionType Mode;
+
+            // The per-territory claim stamp: this territory's claim-frame-relevant facts.
+            public bool Known;
+            public bool IsEdgeOfTheWorld;
+            public bool Claimed;
+            public bool HasSettlement;
+            public int OwnerEmpireIndex;
+            public int TileCount;
         }
 
         private readonly GameSurface m_Game;
         private readonly Dictionary<int, CacheEntry> m_Cache = new Dictionary<int, CacheEntry>();
         private readonly HashSet<int> m_SeenTiles = new HashSet<int>();
         private readonly List<Pick> m_Merged = new List<Pick>();
+        private readonly HashSet<int> m_Visited = new HashSet<int>();
+        private List<int> m_Frontier = new List<int>(); // the territories of the current level
+        private List<int> m_NextFrontier = new List<int>(); // swap buffer: no per-level allocation
 
         public PickComputation(GameSurface game)
         {
@@ -149,10 +176,52 @@ namespace SettlementPlacementAdvisor
             m_Merged.Clear();
             m_SeenTiles.Clear();
             AddUnique(GetTerritoryPicks(context.HoveredTerritory, context.TopHovered, pass));
+            AddNeighbourhood(pass);
 
             var picks = m_Merged.ToArray();
             Array.Sort(picks, (a, b) => a.Tile.CompareTo(b.Tile));
             return picks;
+        }
+
+        /// <summary>
+        /// The placement neighborhood beyond the hovered territory: RangeLevels hops over every
+        /// adjacency edge (level 1 is the hovered territory, so RangeLevels - 1 expansions run).
+        /// Every edge counts as a hop - sea, cliff, mountain and closed-border included - and
+        /// every territory reached contributes its own admission set at the neighbour quota,
+        /// served by the per-territory cache: a mouse move costs cache hits plus the territories
+        /// newly entering the neighborhood. A territory whose edges the surface cannot answer
+        /// degrades the pass to what it has already reached and logs the failure.
+        /// </summary>
+        private void AddNeighbourhood(Pass pass)
+        {
+            m_Visited.Clear();
+            m_Visited.Add(pass.Context.HoveredTerritory);
+            m_Frontier.Clear();
+            m_Frontier.Add(pass.Context.HoveredTerritory);
+
+            for (int level = 2; level <= pass.Context.RangeLevels && m_Frontier.Count > 0; level++)
+            {
+                m_NextFrontier.Clear();
+                for (int i = 0; i < m_Frontier.Count; i++)
+                {
+                    SnapshotTerritory.Adjacency[] edges;
+                    if (!m_Game.TryGetAdjacentTerritories(m_Frontier[i], out edges))
+                    {
+                        GameApi.Fail("placement-neighborhood adjacency: territory " + m_Frontier[i]);
+                        continue; // unknown edges: no hops from this territory
+                    }
+                    for (int e = 0; e < edges.Length; e++)
+                    {
+                        int territory = edges[e].TerritoryIndex;
+                        if (!m_Visited.Add(territory)) continue; // one admission set per territory
+                        AddUnique(GetTerritoryPicks(territory, pass.Context.TopNeighbour, pass));
+                        m_NextFrontier.Add(territory);
+                    }
+                }
+                var walked = m_Frontier;
+                m_Frontier = m_NextFrontier;
+                m_NextFrontier = walked;
+            }
         }
 
         private void AddUnique(Pick[] picks)
@@ -165,20 +234,74 @@ namespace SettlementPlacementAdvisor
         private Pick[] GetTerritoryPicks(int territoryIndex, int topCount, Pass pass)
         {
             CacheEntry cached;
-            if (m_Cache.TryGetValue(territoryIndex, out cached)
+            bool keyed = m_Cache.TryGetValue(territoryIndex, out cached)
                 && cached.DistrictFrame == pass.DistrictFrame
                 && cached.ConstructionFrame == pass.ConstructionFrame
                 && cached.VisibilityFrame == pass.VisibilityFrame
-                && cached.TerritoryFrame == pass.TerritoryFrame
                 && cached.TopCount == topCount
                 && cached.EmpireIndex == pass.Context.EmpireIndex
-                && cached.Mode == pass.Context.Mode)
+                && cached.Mode == pass.Context.Mode;
+            if (!keyed)
+                return Recompute(territoryIndex, topCount, pass);
+
+            if (cached.TerritoryFrame == pass.TerritoryFrame)
+                return cached.Picks; // the claim frame is unmoved: no claim fact can have changed
+
+            // The claim frame moved. Decide from this territory's own facts: an unchanged stamp
+            // means the bump came from elsewhere in the world, so the cached admission set stands
+            // and the tile gate is asked no tile of this territory.
+            TerritoryFacts facts;
+            if (m_Game.GetTerritoryFacts(territoryIndex, out facts) == TerritoryFactsResult.Known
+                && StampMatches(cached, facts))
             {
+                cached.TerritoryFrame = pass.TerritoryFrame;
+                m_Cache[territoryIndex] = cached;
                 return cached.Picks;
             }
+            return Recompute(territoryIndex, topCount, pass);
+        }
 
-            var picks = Admit(Rank(Evaluated(territoryIndex, pass)), topCount);
+        /// <summary>The cached territory's claim stamp against its facts now.</summary>
+        private static bool StampMatches(CacheEntry cached, TerritoryFacts facts)
+        {
+            return cached.Known
+                && cached.IsEdgeOfTheWorld == facts.IsEdgeOfTheWorld
+                && cached.Claimed == facts.Claimed
+                && cached.HasSettlement == facts.HasSettlement
+                && cached.OwnerEmpireIndex == facts.OwnerEmpireIndex
+                && cached.TileCount == facts.Tiles.Length;
+        }
 
+        /// <summary>The territory's full scan pass, cached with its claim stamp: the mode's
+        /// territory filter, then the tile pre-filter, then the tile gate, then scoring. Order is
+        /// SPEC section 2 steps 4 to 7.</summary>
+        private Pick[] Recompute(int territoryIndex, int topCount, Pass pass)
+        {
+            var survivors = new List<Pick>();
+
+            TerritoryFacts facts;
+            // Unknown is a distinct outcome: an unknown territory never advises, and its stamp
+            // records the unknown read so a later known read recomputes it.
+            bool known = m_Game.GetTerritoryFacts(territoryIndex, out facts) == TerritoryFactsResult.Known;
+            if (known && ModePolicy.IsTerritoryClaimable(pass.Context.Mode, facts))
+            {
+                var tiles = facts.Tiles;
+                for (int i = 0; i < tiles.Length; i++)
+                {
+                    var tile = tiles[i];
+                    if (m_Game.IsTileWater(tile)) continue;                       // per tile, never per territory
+                    if (!m_Game.IsTileExplored(tile, pass.Context.EmpireIndex)) continue; // the gate's any-bit predicate
+                    if (!m_Game.IsSettlementSiteTile(pass.DistrictDefinition, tile)) continue; // terrain + POI
+                    if (!GateIsAdmissible(tile, pass)) continue;                 // the mode's tile gate, masked
+                    if (m_Game.IsTileResourceTile(tile)) continue;               // the kept resource-tile exclusion
+                    DistrictPlacementEvaluation.ValidTile validTile;
+                    FixedPoint score;
+                    if (!m_Game.EvaluateTile(pass.Context.Army, tile, pass.DistrictDefinition, out validTile, out score)) continue;
+                    survivors.Add(new Pick { Tile = tile, Score = score, Data = validTile });
+                }
+            }
+
+            var picks = Admit(Rank(survivors), topCount);
             m_Cache[territoryIndex] = new CacheEntry
             {
                 Picks = picks,
@@ -188,39 +311,15 @@ namespace SettlementPlacementAdvisor
                 VisibilityFrame = pass.VisibilityFrame,
                 TerritoryFrame = pass.TerritoryFrame,
                 EmpireIndex = pass.Context.EmpireIndex,
-                Mode = pass.Context.Mode
+                Mode = pass.Context.Mode,
+                Known = known,
+                IsEdgeOfTheWorld = facts.IsEdgeOfTheWorld,
+                Claimed = facts.Claimed,
+                HasSettlement = facts.HasSettlement,
+                OwnerEmpireIndex = facts.OwnerEmpireIndex,
+                TileCount = known ? facts.Tiles.Length : 0
             };
             return picks;
-        }
-
-        /// <summary>Every scoreable tile of the territory: the territory filter, then the tile
-        /// pre-filter, then the tile gate, then scoring. Order is SPEC section 2 steps 4 to 7.</summary>
-        private List<Pick> Evaluated(int territoryIndex, Pass pass)
-        {
-            var survivors = new List<Pick>();
-
-            TerritoryFacts facts;
-            // Unknown is a distinct outcome: an unknown territory never advises.
-            if (m_Game.GetTerritoryFacts(territoryIndex, out facts) != TerritoryFactsResult.Known)
-                return survivors;
-            if (!ModePolicy.IsTerritoryClaimable(pass.Context.Mode, facts))
-                return survivors;
-
-            var tiles = facts.Tiles;
-            for (int i = 0; i < tiles.Length; i++)
-            {
-                var tile = tiles[i];
-                if (m_Game.IsTileWater(tile)) continue;                       // per tile, never per territory
-                if (!m_Game.IsTileExplored(tile, pass.Context.EmpireIndex)) continue; // the gate's any-bit predicate
-                if (!m_Game.IsSettlementSiteTile(pass.DistrictDefinition, tile)) continue; // terrain + POI
-                if (!GateIsAdmissible(tile, pass)) continue;                 // the mode's tile gate, masked
-                if (m_Game.IsTileResourceTile(tile)) continue;               // the kept resource-tile exclusion
-                DistrictPlacementEvaluation.ValidTile validTile;
-                FixedPoint score;
-                if (!m_Game.EvaluateTile(pass.Context.Army, tile, pass.DistrictDefinition, out validTile, out score)) continue;
-                survivors.Add(new Pick { Tile = tile, Score = score, Data = validTile });
-            }
-            return survivors;
         }
 
         /// <summary>The mode's tile gate with the membership mask {NotEnoughMoney,

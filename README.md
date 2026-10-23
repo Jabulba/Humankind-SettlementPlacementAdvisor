@@ -6,16 +6,17 @@
 A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place settlements.
 
 While the settlement placement cursor is active, the advisor marks the best tiles with stars and
-shows their FIMS yields as pins. The hovered territory gets its top two recommendations; every
-other territory within land-adjacency range gets its best one. City founding is left completely
-alone.
+shows their FIMS yields as pins. The recommendation set is the placement neighborhood: the hovered
+territory plus the configured number of adjacency hops over every edge - sea, cliff, mountain and
+closed-border included - and every territory in it gets its own recommendations. City founding is
+left completely alone.
 
 ## Features
 
-- **Recommended-tile stars** for the hovered territory and nearby territories.
+- **Recommended-tile stars** for every territory in the placement neighborhood.
 - **FIMS pins** so you can compare Food, Industry, Money and Science at a glance.
-- **Land-aware range**: sea, cliff, mountain and closed-border edges never extend the
-  recommendation range.
+- **Every adjacency edge is a hop**: sea, cliff, mountain and closed-border edges extend the
+  recommendation range exactly like a land edge.
 - **Uses the game's own evaluation**, including its settlement score weighting.
 - **Safe around city founding**: cities keep their vanilla glyphs, pins and cursor, and any
   settlement tail is released when a city session starts.
@@ -62,11 +63,10 @@ The default rules are:
 | Territory | Recommendations |
 |---|---|
 | Hovered territory | Top 2 tiles |
-| Each territory in range | Top 1 tile |
+| Each other territory in the neighborhood | Top 1 tile |
 
-This build evaluates the hovered territory only; the in-range rows land with the neighbourhood
-scan. Every tile tied with the last recommended score is shown as well, so `TopHovered = 2`
-can show 3 stars, and 4 when three tiles tie at rank 2.
+Every tile tied with the last recommended score is shown as well, so `TopHovered = 2` can show 3
+stars, and 4 when three tiles tie at rank 2.
 
 A tile gets no star when it is unexplored, water, not a valid settlement site for the mode, or
 its territory is at the edge of the world, claimed, or already hosts a settlement. Water is
@@ -87,12 +87,13 @@ BepInEx/config/com.jabulba.settlementplacementadvisor.cfg
 
 | Setting | Default | Meaning |
 |---|---:|---|
-| `TopHovered` | `2` | Recommendations on the hovered territory |
-| `TopNeighbour` | `1` | Recommendations on every other territory in range |
-| `RangeLevels` | `2` | Land-adjacency range; the hovered territory counts as level 1 |
+| `TopHovered` | `2` | Admission quota on the hovered territory |
+| `TopNeighbour` | `1` | Admission quota on every other territory in the placement neighborhood |
+| `RangeLevels` | `2` | Placement-neighborhood hops; the hovered territory counts as level 1 |
 
-`RangeLevels = 2` means the hovered territory plus directly adjacent land territories.
-`RangeLevels = 3` adds territories adjacent to those. Values below 1 are clamped to 1.
+`RangeLevels = 2` means the hovered territory plus the territories adjacent to it. `RangeLevels = 3`
+adds the territories adjacent to those. Every adjacency edge counts as a hop: sea, cliff, mountain
+and closed-border edges included. Values below 1 are clamped to 1.
 
 The tile under the mouse ghost remains part of the vanilla placement cursor, so it can add one
 visual highlight on top of the configured count.
@@ -106,15 +107,20 @@ and vanilla's full camp evaluation is never called from that snapshot. It then:
 1. Dispatches on the stamped placement mode: the camp row runs the pipeline, any other mode
    shows nothing and leaves its evaluation to vanilla.
 2. Asks the camp action's army-level gate; an army that cannot build a camp advises nothing.
-3. Filters the claimable territories, then the tiles: water per tile, exploration, settlement
+3. Scans the placement neighborhood: the hovered territory plus `RangeLevels` hops over every
+   adjacency edge, every tile of every territory in it, with no reachability, zone-of-control,
+   movement or cap rule in the way.
+4. Filters the claimable territories, then the tiles: water per tile, exploration, settlement
    capability with the camp district definition, then the game's own tile gate with the
    money/influence mask.
-4. Scores each surviving tile with the game's own settlement evaluation - vanilla weights, and
-   the resource-deposit exclusion vanilla applies - and keeps the top tiles per territory, using
-   a per-territory cache keyed by the frames the rules read (including the world claim frame).
-5. Writes the selected tiles into a fixed tail of the placement evaluation, then publishes an
+5. Scores each surviving tile with the game's own settlement evaluation - vanilla weights, and
+   the resource-deposit exclusion vanilla applies - and admits the quota plus every tied tile per
+   territory, using a per-territory cache keyed by the frames the rules read, the world claim
+   frame included, so a claim, unclaim, owner steal, exploration or patrol change recomputes the
+   territory it changed.
+6. Writes the admitted tiles into a fixed tail of the placement evaluation, then publishes an
    immutable pick set for the presentation side.
-6. Renders stars and controls the FIMS pin gate from that pick set.
+7. Renders stars and controls the FIMS pin gate from that pick set.
 
 All writes are restricted to `CreateCamp`. `FoundCity` and `FoundCityWithSettler` share the same
 evaluation type, which is why city sessions are a strict no-op: no stars, no pins, no glyph
