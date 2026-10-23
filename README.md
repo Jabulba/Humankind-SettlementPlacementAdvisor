@@ -53,8 +53,7 @@ Typical plugin locations:
 ## Usage
 
 1. Select an army and start **settlement placement**.
-2. Hover over a territory. Recommended tiles in the hovered territory and in nearby territories
-   are marked with stars.
+2. Hover over a territory. Recommended tiles are marked with stars.
 3. Check the FIMS pins to compare the candidates.
 4. Place the settlement on the tile you prefer. The advisor does not restrict your choice.
 
@@ -65,11 +64,18 @@ The default rules are:
 | Hovered territory | Top 2 tiles |
 | Each territory in range | Top 1 tile |
 
-A tile gets no star when it is unexplored, already owned, or water. Water is filtered per
-tile: sea-flagged territories can host valid camp sites, so the advisor never skips a
-territory for its ocean flag. The configured counts are
-mandatory rather than a minimum-FIMS filter: tiles below the vanilla minimum-FIMS threshold are
-still eligible.
+This build evaluates the hovered territory only; the in-range rows land with the neighbourhood
+scan. Every tile tied with the last recommended score is shown as well, so `TopHovered = 2`
+can show 3 stars, and 4 when three tiles tie at rank 2.
+
+A tile gets no star when it is unexplored, water, not a valid settlement site for the mode, or
+its territory is at the edge of the world, claimed, or already hosts a settlement. Water is
+filtered per tile: sea-flagged territories can host valid camp sites, so the advisor never skips
+a territory for its ocean flag. The counts are mandatory rather than a minimum-FIMS filter:
+tiles below the vanilla minimum-FIMS threshold are still eligible, and a territory-border tile
+is no exception. The advisor does not filter on cost: a camp you cannot afford is still
+recommended, because the game's own placement gate reports money and influence as post-filter
+costs, not as placement validity.
 
 ## Configuration
 
@@ -93,15 +99,22 @@ visual highlight on top of the configured count.
 
 ## How it works
 
-The mod hooks the game's settlement placement evaluation after vanilla refreshes the cursor
-position. It then:
+For camp placement the mod takes over the game's placement-snapshot sync
+(`SettlementPlacementCursorSnapshot.EvaluatePlacement`): the advisor's own pipeline answers it
+and vanilla's full camp evaluation is never called from that snapshot. It then:
 
-1. Walks the hovered territory and its land-adjacent neighbours.
-2. Evaluates candidate tiles with the game's own settlement evaluation.
-3. Keeps the best candidates per territory, using a frame-aware cache.
-4. Writes the selected tiles into a fixed tail of the placement evaluation, then publishes an
+1. Dispatches on the stamped placement mode: the camp row runs the pipeline, any other mode
+   shows nothing and leaves its evaluation to vanilla.
+2. Asks the camp action's army-level gate; an army that cannot build a camp advises nothing.
+3. Filters the claimable territories, then the tiles: water per tile, exploration, settlement
+   capability with the camp district definition, then the game's own tile gate with the
+   money/influence mask.
+4. Scores each surviving tile with the game's own settlement evaluation - vanilla weights, and
+   the resource-deposit exclusion vanilla applies - and keeps the top tiles per territory, using
+   a per-territory cache keyed by the frames the rules read (including the world claim frame).
+5. Writes the selected tiles into a fixed tail of the placement evaluation, then publishes an
    immutable pick set for the presentation side.
-5. Renders stars and controls the FIMS pin gate from that pick set.
+6. Renders stars and controls the FIMS pin gate from that pick set.
 
 All writes are restricted to `CreateCamp`. `FoundCity` and `FoundCityWithSettler` share the same
 evaluation type, which is why city sessions are a strict no-op: no stars, no pins, no glyph
