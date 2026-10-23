@@ -130,11 +130,12 @@ internal sealed class CountingCanvas : PickCanvas
 }
 
 /// <summary>
-/// DEBUG [noopc] no-op contract harness. All three settle types share
+/// DEBUG [noopc] shown-set contract harness. All three settle types share
 /// CampPlacementEvaluation, so a city session must see zero writes. Checks compare a full
 /// signature of the mutable state before and after, catching any mutation, not just known
-/// ones. Settlement placement is the control: tail reserved, picks written, vanilla glyphs
-/// suppressed. The pin gate is driven through the real postfix.
+/// ones. Camp placement is the control: tail reserved, picks written Showable, vanilla's own
+/// glyphs untouched, stars and the pin gate answering the published membership. The pin gate is
+/// driven through the real postfix, and vanilla's unpatched pin filter chain is driven directly.
 /// </summary>
 internal static class Program
 {
@@ -288,6 +289,112 @@ internal static class Program
         return true;
     }
 
+    /// <summary>Every advisor slot a published member occupies: the FIMS yields vanilla's
+    /// zero-gains-and-zero-losses pin filter tests (PlacementPinsSubset.cs:52-55). The synthetic
+    /// surface evaluates tiles through ValidTile.Initialize, which is a zero-yield tile, so every
+    /// member the advisor admits here is one vanilla's filter rejects a pin for.</summary>
+    private static bool AllMemberEntriesZeroYield(CampPlacementEvaluation e, int[] members)
+    {
+        var seen = 0;
+        for (int i = 0; i < e.ValidTileCount; i++)
+        {
+            var entry = e.ValidTiles[i];
+            if (!ContainsTile(members, entry.TileIndex)) continue;
+            if (entry.OverallGains.CountFimsType() != 0 || entry.OverallLosses.CountFimsType() != 0) return false;
+            seen++;
+        }
+        return seen == members.Length;
+    }
+
+    /// <summary>A writer-scrubbed slot: the Initialize(-1) shape vanilla skips.</summary>
+    private static DistrictPlacementEvaluation.ValidTile ScrubbedEntry()
+    {
+        var cleared = default(DistrictPlacementEvaluation.ValidTile);
+        cleared.Initialize(-1);
+        return cleared;
+    }
+
+    /// <summary>
+    /// Drive vanilla's sealed generic pin filter chain, the code the mod never patches: it runs
+    /// its generic filters and only then calls the hook the pin gate postfix overrides. The tile
+    /// filter is the headless-reachable one; the exploration filter behind it needs the
+    /// presentation visibility controller, which exists only in a running game.
+    /// </summary>
+    private static bool VanillaPinFilter(DistrictPlacementEvaluation.ValidTile info)
+    {
+        var subset = Activator.CreateInstance(typeof(Amplitude.Mercury.UI.SettlementPlacementPinsSubset));
+        var filter = typeof(Amplitude.Mercury.UI.PlacementPinsSubset)
+            .GetMethod("PinMustBeShown", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (bool)filter.Invoke(subset, new object[] { info, 0 });
+    }
+
+    /// <summary>
+    /// Stamp the placement mode the pin gate reads. In production the takeover stamps the mode
+    /// on the snapshot's own placement evaluation (SettlementPlacementCursorSnapshot.cs:43),
+    /// which is the same evaluation vanilla's gate reads, so the harness stamps the same field.
+    /// </summary>
+    private static void SetPresentationMode(ArmyActionType mode)
+    {
+        Snapshots.SettlementPlacementCursorSnapshot.PresentationData.PlacementEvaluation.SettleType = mode;
+    }
+
+    /// <summary>The cursor-slot gate result vanilla's hovered rule reads.</summary>
+    private static void SetPresentationFailure(ArmyActionFailureFlags failure)
+    {
+        Snapshots.SettlementPlacementCursorSnapshot.PresentationData.PlacementEvaluation.SettleFailure = failure;
+    }
+
+    /// <summary>Membership answered independently of the mod: a plain scan of the published tiles.</summary>
+    private static bool ContainsTile(int[] tiles, int tileIndex)
+    {
+        for (int i = 0; i < tiles.Length; i++)
+            if (tiles[i] == tileIndex) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The shown-set invariant over the advisor's own slot window: every published member
+    /// Showable, every advisor-owned slot outside the set not Showable, and exactly the member
+    /// count shown. Vanilla's slots are outside the window: the advisor owns none of them.
+    /// </summary>
+    private static bool ShowableIsMembership(CampPlacementEvaluation e, int baseline, int[] members)
+    {
+        var shown = 0;
+        for (int i = baseline + 1; i < e.ValidTileCount; i++)
+        {
+            var member = ContainsTile(members, e.ValidTiles[i].TileIndex);
+            if (e.ValidTiles[i].Showable != member) return false;
+            if (member) shown++;
+        }
+        return shown == members.Length;
+    }
+
+    /// <summary>
+    /// The advisor's own slots inside the live count that carry the scrubbed shape (no tile,
+    /// not shown): the slots this refresh released. A live entry that is neither a member nor
+    /// scrubbed breaks the invariant and reports -1.
+    /// </summary>
+    private static int ScrubbedAdvisorSlots(CampPlacementEvaluation e, int baseline, int[] members)
+    {
+        var scrubbed = 0;
+        for (int i = baseline + 1; i < e.ValidTileCount; i++)
+        {
+            var entry = e.ValidTiles[i];
+            if (entry.TileIndex == -1 && !entry.Showable) scrubbed++;
+            else if (!ContainsTile(members, entry.TileIndex)) return -1;
+        }
+        return scrubbed;
+    }
+
+    /// <summary>Vanilla's own glyph flags, slot by slot: the writer owns none of them.</summary>
+    private static string VanillaGlyphs(CampPlacementEvaluation e, int baseline)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < baseline; i++)
+            sb.Append('|').Append(e.ValidTiles[i].TileIndex).Append(e.ValidTiles[i].Showable ? 'S' : '-');
+        return sb.ToString();
+    }
+
     private static int Main()
     {
         var surface = new GraphSurface();
@@ -332,8 +439,10 @@ internal static class Program
         plugin.Writer.ClearTail(settler);
         Check("FoundCityWithSettler: zero writes", Signature(settler) == settlerClean);
 
-        // B. Settlement control: the advisor's own session must behave exactly as before.
+        // B. Camp control: the shown set. Stars and glyphs are the published membership; the
+        // writer owns the tail slots only, and vanilla's own glyph flags are its to keep.
         var settlement = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        var settlementGlyphs = VanillaGlyphs(settlement, baseline);
         plugin.Writer.NoteActivation(settlement);
         Check("CreateCamp activation reserves the tail window",
             settlement.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity);
@@ -344,26 +453,56 @@ internal static class Program
         for (int i = baseline + 1; i < settlement.ValidTileCount; i++)
             for (int t = 0; t < tiles.Length; t++)
                 if (settlement.ValidTiles[i].TileIndex == tiles[t]) inTail++;
-        bool glyphsSuppressed = true;
-        for (int i = 0; i < baseline; i++)
-            if (settlement.ValidTiles[i].Showable) glyphsSuppressed = false;
 
         Check("CreateCamp refresh publishes ascending unique tiles", AscendingUnique(tiles));
         Check("CreateCamp refresh writes every pick into its tail slot",
             settlement.ValidTileCount > baseline + 1 && inTail == tiles.Length);
-        Check("CreateCamp refresh suppresses the vanilla glyphs", glyphsSuppressed);
+        Check("CreateCamp refresh: Showable equals pick-set membership in the advisor's slots",
+            ShowableIsMembership(settlement, baseline, tiles));
+        Check("CreateCamp refresh: vanilla's glyph flags are untouched",
+            VanillaGlyphs(settlement, baseline) == settlementGlyphs);
         plugin.Stars.Render(PickSet.Current);
         Check("settlement pick set starts one star per pick", canvas.Started == tiles.Length);
 
-        // C. Pin gate through the real postfix, with a snapshot that reports a vanilla best tile.
+        // A smaller admission set releases slots. The writer zero-fills what it released, so
+        // inside the live count the published membership stays the only live entry set.
+        surface.TileGateFlags[132] = ArmyActionFailureFlags_Part1.TileIsOccupied;
+        surface.TileGateFlags[133] = ArmyActionFailureFlags_Part1.TileIsOccupied;
+        surface.DistrictFrame++;
+        Refresh(settlement, 131);
+        var shrunk = PickSet.Current.Tiles;
+        plugin.Stars.Render(PickSet.Current);
+        Check("a smaller pick set scrubs the slots it released",
+            shrunk.Length < tiles.Length
+            && ShowableIsMembership(settlement, baseline, shrunk)
+            && ScrubbedAdvisorSlots(settlement, baseline, shrunk) >= tiles.Length - shrunk.Length);
+        surface.TileGateFlags.Clear();
+        surface.DistrictFrame++;
+        Refresh(settlement, 131);
+        Check("the restored pick set re-occupies its invariant slots",
+            ShowableIsMembership(settlement, baseline, PickSet.Current.Tiles));
+        plugin.Stars.Render(PickSet.Current);
+
+        // C. Pin gate through the real postfix: published-set membership plus vanilla's hovered
+        // rule, answered from the mode the takeover stamps on the snapshot's own evaluation.
         var snapshot = CreateSnapshot();
         int bestTile = 5001; // a vanilla best-2 tile: never an advisor pick (picks are 13x tiles)
         snapshot.PresentationData.PlacementEvaluation.BestCampPlacementTileIndexes = new[] { bestTile, -1 };
         Snapshots.SettlementPlacementCursorSnapshot = snapshot;
+        SetPresentationMode(ArmyActionType.CreateCamp);
+        SetPresentationFailure(ArmyActionFailureFlags.None);
 
         int pickTile = tiles[0];
-        Gate("active pick set forces the pin on a pick", false, pickTile, true);
-        Gate("active pick set suppresses the vanilla best pin outside the set", true, bestTile, false);
+        Gate("camp: a member shows its pin", true, pickTile, true);
+        Gate("camp: a member shows its pin with vanilla answering off", false, pickTile, true);
+        Gate("camp: the vanilla best tile outside the set shows no pin", true, bestTile, false);
+        SetPresentationFailure((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughInfluence);
+        Gate("camp: an influence-only cursor failure keeps the member pin", true, pickTile, true);
+        SetPresentationFailure((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughMoney);
+        Gate("camp: a money cursor failure drops the member pin", true, pickTile, false);
+        SetPresentationFailure((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.ArmyLocked);
+        Gate("camp: any other cursor failure drops the member pin", true, pickTile, false);
+        SetPresentationFailure(ArmyActionFailureFlags.None);
 
         canvas.Started = 0;
         canvas.Stopped = 0;
@@ -374,8 +513,8 @@ internal static class Program
         Check("deactivation stops every tracked star", canvas.Stopped == tiles.Length && canvas.Started == 0);
         Check("Deactivate publishes the Tiles==null inactive representation",
             PickSet.Current != null && PickSet.Current.Tiles == null);
-        Gate("inactive by Tiles: vanilla best pin survives", true, bestTile, true);
-        Gate("inactive by Tiles: vanilla answer survives on a former pick tile", false, pickTile, false);
+        Gate("camp INACTIVE: the vanilla best tile shows no pin", true, bestTile, false);
+        Gate("camp INACTIVE: a former pick tile shows no pin", true, pickTile, false);
 
         int deactivatedVersion = PickSet.Current.Version;
         plugin.Advisor.Deactivate();
@@ -383,12 +522,15 @@ internal static class Program
             PickSet.Current.Version == deactivatedVersion && PickSet.Current.Tiles == null);
 
         PickSet.Current = null;
-        Gate("no pick set at all: vanilla answer survives", true, bestTile, true);
+        Gate("camp before any publish: no pin shows", true, bestTile, false);
+        SetPresentationMode(ArmyActionType.FoundCity);
+        Gate("a mode the advisor does not own keeps a vanilla pin answer on", true, bestTile, true);
+        Gate("a mode the advisor does not own keeps a vanilla pin answer off", false, pickTile, false);
+        SetPresentationMode(ArmyActionType.CreateCamp);
 
-        // C2. Zero-pick publish (every neighborhood territory claimed/all-water): the advisor must
-        // deactivate, NOT publish an active empty set, because an active set suppresses the
-        // vanilla best pins without replacing them (observed in-game: only the hovered tile
-        // keeps its FIMS pin).
+        // C2. Zero-pick publish (every neighborhood territory claimed/all-water): the advisor
+        // publishes INACTIVE and displays nothing: stars cleared, no pick entries, and no
+        // vanilla surface taking the advisor's place.
         surface.AllWater = true;
         surface.DistrictFrame++; // cache-key bump: per-territory caches must miss
         Refresh(settlement, 130);
@@ -404,7 +546,8 @@ internal static class Program
         }
         Check("zero-pick refresh leaves no pick entries inside the valid window",
             Inactive() && foreignSlots == 0);
-        Gate("zero-pick refresh: vanilla best pin survives", true, bestTile, true);
+        Gate("zero-pick refresh: the vanilla best tile shows no pin", true, bestTile, false);
+        Gate("zero-pick refresh: the cursor tile shows no pin", true, 130, false);
 
         // C3. Sea-flagged territory hosting land camp sites (observed in-game: all 25 valid
         // camp sites sat in a territory the AI snapshot flags IsOcean): the advisor must
@@ -448,6 +591,8 @@ internal static class Program
         Check("city activation on the shared array releases the settlement tail", tailReleased);
         Check("city activation on the shared array leaves vanilla's slots alone",
             VanillaSlots(settlement, baseline) == vanillaSlots && Inactive());
+        Check("a mode switch leaks no suppressed glyph: vanilla's flags survive the settlement session",
+            VanillaGlyphs(settlement, baseline) == settlementGlyphs);
 
         // F. Game surface contract: the membership mask (SPEC section 2 step 6) and the startup
         // name checks for every member the rewrite adds (no partial binding).
@@ -501,12 +646,31 @@ internal static class Program
         Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PickSet.Current.Tiles) == 0);
         Check("camp takeover leaves the best-camp arrays retired",
             AllMinusOne(scanEval.BestCampPlacementTileIndexes) && AllMinusOne(scanEval.BestCampPlacementIndexes));
+        Check("no mod code reads the best-camp array: a populated best tile outside the set shows no pin",
+            !GateAnswer(bestTile, true));
 
-        // The army-level gate: any hit publishes INACTIVE, writes nothing, and asks no tile.
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        int trackedStars = canvas.Started;
+        int liveStars = trackedStars; // fx the renderer currently tracks, in members of the last set rendered
+        Check("the takeover's admission set renders one star per member",
+            trackedStars == PickSet.Current.Tiles.Length);
+
+        // The army-level gate: any hit publishes INACTIVE, writes nothing, asks no tile, and
+        // displays nothing: stars cleared, no pin, no vanilla surface taking the advice's place.
         surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.ArmyLocked;
         surface.TileGateCalls = 0;
         Refresh(scanEval, 131);
         Check("army-level gate hit publishes INACTIVE", Inactive());
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        Check("army-level gate hit clears every tracked star",
+            canvas.Stopped == trackedStars && canvas.Started == 0);
+        Check("army-level gate hit shows no pin and takes no vanilla fallback",
+            !GateAnswer(131, true) && !GateAnswer(bestTile, true));
+
         bool gateCleanTail = scanEval.ValidTileCount <= 1; // the cursor slot, nothing appended
         for (int i = 1; i < scanEval.ValidTiles.Length; i++)
             if (scanEval.ValidTiles[i].TileIndex != -1) gateCleanTail = false;
@@ -544,8 +708,38 @@ internal static class Program
         canvas.Stopped = 0;
         plugin.Stars.Render(PickSet.Current);
         Check("every admitted tile gets a star, uncapped", canvas.Started == admitted.Length);
+        liveStars = admitted.Length;
         Check("pins follow the published membership",
             GateAnswer(131) && GateAnswer(132) && GateAnswer(133) && !GateAnswer(121) && !GateAnswer(5001));
+
+        // The two renderings disagree on exactly the rows vanilla's generic pin filters decide:
+        // a member with zero FIMS yields and a member off screen both keep their star, and the
+        // advisor's gate admits both - the yield reject and the on-screen culling live in the
+        // sealed filter chain vanilla owns, which the mod never patches.
+        Check("every published member entry carries the zero-yield fact the vanilla yield filter rejects",
+            AllMemberEntriesZeroYield(scanEval, admitted));
+        Check("vanilla's unpatched filter chain rejects a scrubbed slot the gate admits",
+            !VanillaPinFilter(ScrubbedEntry()));
+        Check("the gate carries no yield rule of its own: every zero-yield member is admitted",
+            GateAnswer(admitted[0]) && GateAnswer(admitted[1]) && GateAnswer(admitted[2]));
+
+        // A member three territories deep in the placement neighborhood - the far side of the
+        // map from the cursor: its star renders, the gate admits it, and the on-screen culling
+        // that keeps its pin off screen is vanilla's, unoverridden.
+        Plugin.CfgRangeLevels.Value = 3;
+        surface.DistrictFrame++;
+        Refresh(scanEval, 101);
+        var neighborhood = PickSet.Current.Tiles;
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current);
+        Check("a neighborhood member far from the cursor gets its star",
+            ContainsTile(neighborhood, 123) && canvas.Started == neighborhood.Length);
+        liveStars = neighborhood.Length; // the fx the renderer tracks after this pass
+        Check("a neighborhood member far from the cursor is admitted by the gate",
+            GateAnswer(123) && !GateAnswer(122));
+        Plugin.CfgRangeLevels.Value = 2;
+        surface.DistrictFrame++;
 
         // The tile gate mask on the pipeline path: money and influence stay in, everything else out.
         surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughMoney;
@@ -560,7 +754,8 @@ internal static class Program
         Check("a dropped tile keeps its star off the set, and its pin off", !GateAnswer(131));
         surface.TileGateFlags.Clear();
 
-        // Zero picks: INACTIVE displays nothing, stars cleared, gate back to vanilla.
+        // Zero picks: INACTIVE displays nothing - stars cleared, no pin, and no vanilla surface
+        // taking the advice's place.
         surface.AllWater = true;
         surface.DistrictFrame++;
         Refresh(scanEval, 131);
@@ -568,9 +763,11 @@ internal static class Program
         canvas.Started = 0;
         canvas.Stopped = 0;
         plugin.Stars.Render(PickSet.Current);
-        Check("INACTIVE clears every tracked star", canvas.Stopped == admitted.Length && canvas.Started == 0);
-        Check("INACTIVE hands the pin gate back to vanilla", !GateAnswer(131, false) && GateAnswer(5001, true));
+        Check("INACTIVE clears every tracked star", canvas.Stopped == liveStars && canvas.Started == 0);
+        Check("zero picks show no pin: neither a former member nor a vanilla best tile",
+            !GateAnswer(131, true) && !GateAnswer(5001, true));
         surface.AllWater = false;
+        liveStars = 0;
 
         // The resource-tile exclusion is a rule of the pipeline, not of the gate.
         surface.ResourceTiles.Add(133);
