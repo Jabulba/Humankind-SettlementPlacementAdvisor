@@ -23,6 +23,7 @@
     <Compile Include="..\..\Advisor.cs" />
     <Compile Include="..\..\AdvisorConfig.cs" />
     <Compile Include="..\..\EvaluationWriter.cs" />
+    <Compile Include="..\..\LoadGate.cs" />
     <Compile Include="..\..\GameApi.cs" />
     <Compile Include="..\..\GameSurface.cs" />
     <Compile Include="..\..\Patches.cs" />

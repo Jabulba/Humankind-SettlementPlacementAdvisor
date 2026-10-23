@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -27,6 +28,28 @@ namespace SettlementPlacementAdvisor
             Logger.LogInfo("[SettlementPlacementAdvisor] " + message);
         }
 
+        /// <summary>
+        /// The load failure, written where it survives the hard exit: through the logger, which Unity
+        /// flushes per line into its own Player.log, plus a file this mod owns under the BepInEx root.
+        /// BepInEx's LogOutput.log is out of reach at this point: its DiskLogListener flushes on a 2
+        /// second timer, so the exit drops buffered lines, and it holds that file open with
+        /// FileShare.Read, so an append from here is refused.
+        /// </summary>
+        private void LogLoadFailure(string message)
+        {
+            Logger.LogError(message);
+            try
+            {
+                LoadGate.AppendFailureLine(
+                    Path.Combine(Paths.BepInExRootPath, AdvisorConfig.PluginName + "-load-failure.log"),
+                    AdvisorConfig.PluginName + " " + ModVersion.Value + ": " + message);
+            }
+            catch (Exception e)
+            {
+                Logger.LogError("load-failure file not written: " + e.Message);
+            }
+        }
+
         private void Awake()
         {
             Instance = this;
@@ -37,13 +60,10 @@ namespace SettlementPlacementAdvisor
             CfgRangeLevels = cfg.RangeLevels;
 
             GameApi.Resolve();
-            if (!GameApi.ReadyStatic)
-            {
-                Log("Disabled, unresolved game members: " + GameApi.ResolveError);
-                return;
-            }
+            LoadGate.EnforceResolvedSurface(LogLoadFailure, LoadGate.CloseGame);
 
-            Log("surface ready, " + GameApi.RequiredNames.Length + " game members resolved: " + string.Join(", ", GameApi.RequiredNames));
+            Log(LoadGate.ReadyLine(GameApi.RequiredNames, AdvisorConfig.TailCapacityFor(
+                CfgTopHovered.Value, CfgTopNeighbour.Value, CfgRangeLevels.Value)));
             Stars = new StarRenderer(new UnityPickCanvas());
             Writer = new EvaluationWriter();
             Advisor = new Advisor(GameApi.Shared, new PickComputation(GameApi.Shared), Writer, Stars);
