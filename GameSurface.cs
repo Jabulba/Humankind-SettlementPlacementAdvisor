@@ -129,8 +129,9 @@ namespace SettlementPlacementAdvisor
         /// order, ALL of them - sea, cliff, mountain and closed-border edges included, with no
         /// transition filter. The placement-neighborhood scan steps over every edge it reports.
         /// False is the distinct no-answer outcome (unknown adjacency), never a territory that
-        /// reports no edges: the scan degrades to the territories it has already reached and
-        /// logs the failure. Snapshot view: read-only, valid for the current refresh.
+        /// reports no edges: the scan degrades to the hovered territory's admission set alone and
+        /// logs the failure (SPEC section 2 step 3). Snapshot view: read-only, valid for the
+        /// current refresh.
         /// </summary>
         bool TryGetAdjacentTerritories(int territoryIndex, out SnapshotTerritory.Adjacency[] edges);
 
