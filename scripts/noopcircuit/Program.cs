@@ -86,12 +86,15 @@ internal sealed class GraphSurface : GameSurface
         return TerritoryFactsResult.Known;
     }
 
-    public Territory.Adjacency[] AdjacentTerritories(int territoryIndex)
+    /// <summary>Placement-neighborhood relation: a 0->1->2->3 chain, the last territory a known
+    /// leaf (it reports no edges, which is a known answer, not an unknown).</summary>
+    public bool TryGetAdjacentTerritories(int territoryIndex, out Territory.Adjacency[] edges)
     {
-        var edges = new Territory.Adjacency[territoryIndex < 3 ? 1 : 0];
-        for (int i = 0; i < edges.Length; i++)
-            edges[i] = new Territory.Adjacency { TerritoryIndex = territoryIndex + 1, Transition = TerritoryTransition.Open };
-        return edges;
+        var reported = new Territory.Adjacency[territoryIndex < 3 ? 1 : 0];
+        for (int i = 0; i < reported.Length; i++)
+            reported[i] = new Territory.Adjacency { TerritoryIndex = territoryIndex + 1, Transition = TerritoryTransition.Open };
+        edges = reported;
+        return true;
     }
 
     /// <summary>The mode's tile gate: scripted per-tile flags, with the mask applied when the
@@ -382,7 +385,7 @@ internal static class Program
         PickSet.Current = null;
         Gate("no pick set at all: vanilla answer survives", true, bestTile, true);
 
-        // C2. Zero-pick publish (all in-range territories claimed/all-water): the advisor must
+        // C2. Zero-pick publish (every neighborhood territory claimed/all-water): the advisor must
         // deactivate, NOT publish an active empty set, because an active set suppresses the
         // vanilla best pins without replacing them (observed in-game: only the hovered tile
         // keeps its FIMS pin).

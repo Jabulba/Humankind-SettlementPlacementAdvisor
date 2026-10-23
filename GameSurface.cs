@@ -120,12 +120,14 @@ namespace SettlementPlacementAdvisor
         TerritoryFactsResult GetTerritoryFacts(int territoryIndex, out TerritoryFacts facts);
 
         /// <summary>
-        /// Adjacency edges of a territory, in snapshot order, ALL of them: sea, cliff, mountain
-        /// and closed edges included, no transition filter here. Callers pick the edges their
-        /// rule steps over. Empty when unknown. Snapshot view: read-only, valid for the
-        /// current refresh.
+        /// The placement-neighborhood relation: the adjacency edges of a territory in snapshot
+        /// order, ALL of them - sea, cliff, mountain and closed-border edges included, with no
+        /// transition filter. The placement-neighborhood scan steps over every edge it reports.
+        /// False is the distinct no-answer outcome (unknown adjacency), never a territory that
+        /// reports no edges: the scan degrades to the territories it has already reached and
+        /// logs the failure. Snapshot view: read-only, valid for the current refresh.
         /// </summary>
-        SnapshotTerritory.Adjacency[] AdjacentTerritories(int territoryIndex);
+        bool TryGetAdjacentTerritories(int territoryIndex, out SnapshotTerritory.Adjacency[] edges);
 
         /// <summary>
         /// The mode's tile gate (sim thread, one reflection call per tile): the settle-cost body

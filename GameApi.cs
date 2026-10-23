@@ -117,7 +117,6 @@ namespace SettlementPlacementAdvisor
 
         private static readonly HashSet<string> s_LogOnce = new HashSet<string>();
         private static readonly int[] s_NoTiles = new int[0];
-        private static readonly SnapshotTerritory.Adjacency[] s_NoAdjacencies = new SnapshotTerritory.Adjacency[0];
 
         private static Dictionary<string, FieldInfo> s_Fields = new Dictionary<string, FieldInfo>();
         private static Dictionary<string, MethodInfo> s_Methods = new Dictionary<string, MethodInfo>();
@@ -454,20 +453,24 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        public SnapshotTerritory.Adjacency[] AdjacentTerritories(int territoryIndex)
+        public bool TryGetAdjacentTerritories(int territoryIndex, out SnapshotTerritory.Adjacency[] edges)
         {
+            edges = null;
             try
             {
                 var world = AiSnapshots.World;
                 var territories = world == null ? null : world.Territories;
-                if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length) return s_NoAdjacencies;
-                var edges = territories[territoryIndex].Adjacencies;
-                return edges == null ? s_NoAdjacencies : edges;
+                if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length)
+                    return false;
+                var reported = territories[territoryIndex].Adjacencies;
+                if (reported == null) return false; // no edge set on the snapshot entity
+                edges = reported; // every edge: no transition filter here
+                return true;
             }
             catch (Exception e)
             {
                 Fail("territory adjacencies: " + e.Message);
-                return s_NoAdjacencies;
+                return false;
             }
         }
 

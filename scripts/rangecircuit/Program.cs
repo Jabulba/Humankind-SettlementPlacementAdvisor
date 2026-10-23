@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Amplitude;
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType
 using Amplitude.Mercury.Interop;
@@ -10,9 +11,11 @@ using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition;
 
 /// <summary>
 /// DEBUG [rngc3] synthetic surface for the camp pipeline: the territory filter, the tile
-/// pre-filter, the tile gate, scoring, admission and the cache are all read through
-/// GameSurface. Every territory has settlement-site tiles with literal scores set per case, so
-/// expected admissions are spec literals, never recomputed from the rules.
+/// pre-filter, the tile gate, scoring, admission, the placement-neighborhood adjacency relation
+/// and the cache are all read through GameSurface. Every territory has settlement-site tiles with
+/// literal scores set per case, so expected admissions are spec literals, never recomputed from
+/// the rules. FactsReads and TileGateCalls count the work a pass does per territory, so
+/// "served from the cache" is observable.
 /// </summary>
 internal sealed class GraphSurface : GameSurface
 {
@@ -25,8 +28,10 @@ internal sealed class GraphSurface : GameSurface
     public int TerritoryCount;
     public List<Edge>[] Edges;
     public bool[] UnknownFacts; // territories whose snapshot facts are missing
+    public bool[] UnknownAdjacency; // territories whose adjacency edges the snapshot cannot report
     public bool[] IsEdgeOfTheWorld;
     public bool[] Claimed;
+    public int[] OwnerEmpire; // owning empire per territory, -1 unowned: an owner steal moves the stamp
     public bool[] HasSettlement;
     public bool[] AllOcean; // territory ocean flags: never a filter
     public int[][] Tiles; // settlement-site tiles per territory
@@ -45,6 +50,8 @@ internal sealed class GraphSurface : GameSurface
     public int TerritoryFrame = 1;
 
     public int TileGateCalls; // the gate must run on every pre-filter survivor
+    public int[] FactsReads; // territory-facts reads per territory: a cache-served pass reads none
+    public int[] TileGateCallsByTerritory; // per territory: a cache-served territory asks no tile gate
     public string DefinitionRequests = ""; // every district-definition request the rules made
 
     public bool Ready { get { return true; } }
@@ -105,32 +112,41 @@ internal sealed class GraphSurface : GameSurface
         facts = default(TerritoryFacts);
         if (territoryIndex < 0 || territoryIndex >= TerritoryCount || UnknownFacts[territoryIndex])
             return TerritoryFactsResult.Unknown;
+        FactsReads[territoryIndex]++;
         facts.IsEdgeOfTheWorld = IsEdgeOfTheWorld[territoryIndex];
         facts.Claimed = Claimed[territoryIndex];
         facts.HasSettlement = HasSettlement[territoryIndex];
-        facts.OwnerEmpireIndex = -1;
+        facts.OwnerEmpireIndex = OwnerEmpire[territoryIndex];
         facts.Tiles = Tiles[territoryIndex];
         return TerritoryFactsResult.Known;
     }
 
-    public Territory.Adjacency[] AdjacentTerritories(int territoryIndex)
+    /// <summary>The placement-neighborhood relation: every adjacency edge, unfiltered. Unknown is
+    /// the distinct no-answer outcome, never a territory that reports no edges.</summary>
+    public bool TryGetAdjacentTerritories(int territoryIndex, out Territory.Adjacency[] edges)
     {
-        var edges = Edges[territoryIndex];
-        var adjacencies = new Territory.Adjacency[edges.Count];
-        for (int i = 0; i < edges.Count; i++)
+        edges = null;
+        if (territoryIndex < 0 || territoryIndex >= TerritoryCount || UnknownAdjacency[territoryIndex])
+            return false;
+        var links = Edges[territoryIndex];
+        var adjacencies = new Territory.Adjacency[links.Count];
+        for (int i = 0; i < links.Count; i++)
         {
             adjacencies[i] = new Territory.Adjacency
             {
-                TerritoryIndex = edges[i].To,
-                Transition = edges[i].Transition
+                TerritoryIndex = links[i].To,
+                Transition = links[i].Transition
             };
         }
-        return adjacencies; // every edge: the surface applies no transition filter
+        edges = adjacencies;
+        return true; // every edge: the relation applies no transition filter
     }
 
     public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence, out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
     {
         TileGateCalls++;
+        int tileTerritory = TerritoryOfTile(tileIndex);
+        if (tileTerritory >= 0) TileGateCallsByTerritory[tileTerritory]++;
         var part1 = TileGateFlags.ContainsKey(tileIndex) ? TileGateFlags[tileIndex] : ArmyActionFailureFlags_Part1.None;
         failures = maskMoneyAndInfluence ? GameApi.ApplyMoneyInfluenceMask((ArmyActionFailureFlags)part1) : (ArmyActionFailureFlags)part1;
         moneyCost = FixedPoint.Zero;
@@ -152,6 +168,23 @@ internal sealed class GraphSurface : GameSurface
         indexes.Sort();
         return indexes.ToArray();
     }
+
+    public int FactsReadTotal()
+    {
+        int total = 0;
+        for (int i = 0; i < FactsReads.Length; i++) total += FactsReads[i];
+        return total;
+    }
+
+    public void ResetCounters()
+    {
+        TileGateCalls = 0;
+        for (int i = 0; i < FactsReads.Length; i++)
+        {
+            FactsReads[i] = 0;
+            TileGateCallsByTerritory[i] = 0;
+        }
+    }
 }
 
 internal static class Program
@@ -160,11 +193,16 @@ internal static class Program
 
     private static int Main()
     {
+        Plugin.Instance = new Plugin(); // so a surface failure has a log to write to
         Admission();
         Filters();
         Gate();
         Scoring();
         Cache();
+        Neighborhood();
+        ClaimFrame();
+        MouseMove();
+        UnknownAdjacency();
         Surface();
 
         Console.WriteLine("[rngc3] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " rule violations)"));
@@ -332,7 +370,153 @@ internal static class Program
         Expect("the construction frame still invalidates", Pick(computation, surface, ArmyActionType.CreateCamp, 2, 1), 100, 101);
     }
 
-    /// <summary>Surface rows the pipeline relies on: all edges reported, definition per mode.</summary>
+
+    /// <summary>SPEC section 2 step 3: the placement neighborhood is the hovered territory
+    /// (level 1) plus RangeLevels hops over EVERY adjacency edge, every tile of every territory
+    /// in it, each territory publishing its own admission set. No reachability, no cap,
+    /// no budget, no truncation.</summary>
+    private static void Neighborhood()
+    {
+        var chain = Chain();
+        Expect("RangeLevels 1 is the hovered territory alone", Scan(chain, 2, 1, 1), 100, 102);
+        Expect("the land hop counts: level 2 publishes territories 0 and 1", Scan(chain, 2, 1, 2), 100, 102, 110, 111);
+        Expect("the cliff hop counts: level 3 reaches every territory in the neighborhood", Scan(chain, 2, 1, 3), 100, 102, 110, 111, 121);
+        Expect("the sea hop counts: level 4 publishes territory 3 as well", Scan(chain, 2, 1, 4), 100, 102, 110, 111, 121, 130);
+        Expect("the closed-border hop counts: level 5 publishes territory 4 as well", Scan(chain, 2, 1, 5), 100, 102, 110, 111, 121, 130, 140);
+        Expect("the neighbour quota is the admission quota of every non-hovered territory", Scan(chain, 2, 2, 3), 100, 102, 110, 111, 121, 122);
+        Expect("the hovered quota belongs to the hovered territory alone", Scan(chain, 1, 2, 2), 100, 110, 111);
+        Expect("no cap, no budget, no truncation: level 5 walks the whole chain", Scan(chain, 1, 1, 5), 100, 110, 111, 121, 130, 140);
+
+        var level3 = Scan(chain, 2, 1, 3);
+        Check("a level-3 hover reaches all 3 neighborhood territories", TerritoriesOf(level3) == 3);
+        Check("level 3 publishes the hovered quota set plus each neighbour territory's own set",
+            CountTerritory(level3, 0) == 2 && CountTerritory(level3, 1) == 2 && CountTerritory(level3, 2) == 1);
+
+        // Each transition kind on its own edge: the relation filters no transition at all.
+        var transitions = new[] { TerritoryTransition.Open, TerritoryTransition.Coast, TerritoryTransition.Cliffs,
+            TerritoryTransition.Mountains, TerritoryTransition.Closed };
+        for (int i = 0; i < transitions.Length; i++)
+        {
+            var single = Camp(tiles: 3, scores: new[] { 30, 10, 20 });
+            Link(single, 0, 1, transitions[i]);
+            Expect("a " + transitions[i] + " edge counts as a neighborhood hop", Scan(single, 2, 1, 2), 100, 102, 112);
+        }
+
+        // The neighborhood is adjacency, not reachability: an unaffordable, fogged, edge-of-world
+        // or claimed neighbor is still stepped over on the way to the territory behind it.
+        var beyond = Chain();
+        beyond.Claimed[1] = true;
+        beyond.UnexploredTiles.Add(110); beyond.UnexploredTiles.Add(111); beyond.UnexploredTiles.Add(112);
+        beyond.IsEdgeOfTheWorld[1] = true;
+        Expect("a territory the mode filters is still a hop: level 3 reaches territory 2", Scan(beyond, 2, 1, 3), 100, 102, 121);
+    }
+
+    /// <summary>Cadence (SPEC section 2): World.TerritoryInfo.Frame is the invalidation signal,
+    /// carried per territory as its claim stamp, so a claim, unclaim, owner steal, exploration or
+    /// patrol change recomputes only the territory it changed: the tile gate runs on that
+    /// territory's tiles and the neighbors serve their cached admission sets.</summary>
+    private static void ClaimFrame()
+    {
+        var chain = Chain();
+        var session = new PickComputation(chain);
+        Expect("level 3 publishes the three neighborhood territories", ScanOn(session, chain, 0, 2, 1, 3), 100, 102, 110, 111, 121);
+
+        chain.Claimed[1] = true;
+        chain.ResetCounters();
+        Expect("a claim with no claim-frame bump serves the cache", ScanOn(session, chain, 0, 2, 1, 3), 100, 102, 110, 111, 121);
+        Check("a cache-served refresh reads no territory facts and asks no tile gate",
+            chain.FactsReadTotal() == 0 && chain.TileGateCalls == 0);
+
+        // The frame bump is the invalidation signal: territory 1 leaves the admission set, and
+        // the other two neighborhood territories serve the sets they published before.
+        chain.ResetCounters();
+        chain.TerritoryFrame++;
+        Expect("the claim-frame change recomputes the claimed territory only",
+            ScanOn(session, chain, 0, 2, 1, 3), 100, 102, 121);
+        Check("the claim-frame change asks the tile gate on no cached neighbor territory",
+            chain.TileGateCallsByTerritory[0] == 0 && chain.TileGateCallsByTerritory[2] == 0);
+
+        // Owner steal: the same frame bump, a territory that stays claimable. Its own tiles are
+        // the only tiles the gate asks; 0 and 1 stay served from the cache.
+        chain.ResetCounters();
+        chain.OwnerEmpire[2] = 3; // stolen from the unowned state
+        chain.TerritoryFrame++;
+        Expect("an owner steal keeps the neighborhood published", ScanOn(session, chain, 0, 2, 1, 3), 100, 102, 121);
+        Check("the owner steal asks the tile gate on the stolen territory's 3 tiles only",
+            chain.TileGateCallsByTerritory[2] == 3 && chain.TileGateCallsByTerritory[0] == 0
+            && chain.TileGateCallsByTerritory[1] == 0);
+
+        // Exploration / patrol change: the surface invalidates exploration through its visibility
+        // frame, and a scouted top tile is admitted from its territory on the next pass.
+        var scouted = Chain();
+        scouted.UnexploredTiles.Add(120);
+        scouted.ScoreByTile[120] = 100; // the best tile of the neighborhood, unscouted
+        var scoutedSession = new PickComputation(scouted);
+        Expect("an unscouted top tile is not admitted", ScanOn(scoutedSession, scouted, 0, 2, 1, 3), 100, 102, 110, 111, 121);
+        scouted.ResetCounters();
+        scouted.UnexploredTiles.Remove(120); // the patrol scouts it
+        scouted.VisibilityFrame++;
+        Expect("the scouting change admits the newly scouted top tile",
+            ScanOn(scoutedSession, scouted, 0, 2, 1, 3), 100, 102, 110, 111, 120);
+    }
+
+    /// <summary>Per mouse move (SPEC section 2, cadence): cache hits plus at most one newly
+    /// entered territory.</summary>
+    private static void MouseMove()
+    {
+        var chain = Chain();
+        var session = new PickComputation(chain);
+        Expect("the first pass fills the cache for the hovered territory", ScanOn(session, chain, 0, 2, 1, 1), 100, 102);
+
+        chain.ResetCounters();
+        Expect("moving inside the hovered territory costs cache hits only", ScanOn(session, chain, 0, 2, 1, 1), 100, 102);
+        Check("the cache-served mouse move reads no facts and asks no tile gate",
+            chain.FactsReadTotal() == 0 && chain.TileGateCalls == 0);
+
+        chain.ResetCounters();
+        Expect("moving to the adjacent territory publishes its admission set", ScanOn(session, chain, 1, 2, 1, 1), 110, 111);
+        Check("the crossing move costs exactly the newly entered territory's 3 tiles",
+            chain.TileGateCalls == 3 && chain.FactsReads[1] == 1 && chain.FactsReads[0] == 0);
+
+        chain.ResetCounters();
+        Expect("moving back serves the cache again", ScanOn(session, chain, 0, 2, 1, 1), 100, 102);
+        Check("the return move asks no tile gate", chain.TileGateCalls == 0);
+    }
+
+    /// <summary>Q28: unknown adjacency degrades the pass to the hovered territory alone and logs
+    /// the surface failure. Unknown is the no-answer outcome, never a territory with no edges.</summary>
+    private static void UnknownAdjacency()
+    {
+        var chain = Chain();
+        chain.UnknownAdjacency[0] = true;
+        var picks = null as Pick[];
+        var logged = Capture(() => { picks = ScanOn(new PickComputation(chain), chain, 0, 2, 1, 3); });
+        Expect("unknown hovered adjacency degrades the pass to the hovered territory", picks, 100, 102);
+        Check("the hovered-territory adjacency failure is logged on the surface",
+            logged.Contains("adjacency") && logged.Contains("territory 0"));
+
+        // A territory whose edges are unknown stops the expansion there; everything already
+        // reached keeps publishing its admission set.
+        var blocked = Chain();
+        blocked.UnknownAdjacency[2] = true;
+        var reached = null as Pick[];
+        var blockedLog = Capture(() => { reached = ScanOn(new PickComputation(blocked), blocked, 0, 2, 1, 5); });
+        Expect("an unknown edge set stops the hops at that territory", reached, 100, 102, 110, 111, 121);
+        Check("the mid-neighborhood adjacency failure is logged on the surface",
+            blockedLog.Contains("adjacency") && blockedLog.Contains("territory 2"));
+
+        // Zero edges is a known answer: the territory is simply a leaf, and nothing is logged.
+        var leaf = Chain();
+        leaf.Edges[1].Clear();
+        leaf.Edges[0].RemoveAll(delegate(GraphSurface.Edge e) { return e.To == 1; });
+        var leafPicks = null as Pick[];
+        var leafLog = Capture(() => { leafPicks = ScanOn(new PickComputation(leaf), leaf, 0, 2, 1, 4); });
+        Expect("a territory with no edges is a leaf, not an unknown", leafPicks, 100, 102);
+        Check("an edgeless territory logs no adjacency failure", !leafLog.Contains("adjacency"));
+    }
+
+    /// <summary>Surface rows the pipeline relies on: the placement-neighborhood relation reports
+    /// every edge unfiltered, and one district definition per mode.</summary>
     private static void Surface()
     {
         var fan = Camp(tiles: 3, scores: new[] { 10, 20, 30 });
@@ -345,7 +529,7 @@ internal static class Program
         bool allEdges = reported.Length == expectedAll.Length;
         for (int i = 0; i < reported.Length && allEdges; i++)
             if (reported[i] != expectedAll[i]) allEdges = false;
-        Console.WriteLine("[rngc3] adjacency surface reports=" + string.Join(",", reported)
+        Console.WriteLine("[rngc3] placement-neighborhood relation reports=" + string.Join(",", reported)
             + " all edges=" + string.Join(",", expectedAll) + (allEdges ? "  OK" : "  MISMATCH"));
         if (!allEdges) s_Failures++;
 
@@ -372,9 +556,14 @@ internal static class Program
         var surface = new GraphSurface { TerritoryCount = 5 };
         surface.IsEdgeOfTheWorld = new bool[5];
         surface.Claimed = new bool[5];
+        surface.OwnerEmpire = new int[5];
+        for (int i = 0; i < 5; i++) surface.OwnerEmpire[i] = -1; // unowned
         surface.HasSettlement = new bool[5];
         surface.AllOcean = new bool[5];
         surface.UnknownFacts = new bool[5];
+        surface.UnknownAdjacency = new bool[5];
+        surface.FactsReads = new int[5];
+        surface.TileGateCallsByTerritory = new int[5];
         surface.Edges = new List<GraphSurface.Edge>[5];
         surface.Tiles = new int[5][];
         for (int i = 0; i < 5; i++)
@@ -396,6 +585,71 @@ internal static class Program
     private static Pick[] Pick(PickComputation computation, GraphSurface surface, ArmyActionType mode, int topHovered, int topNeighbour)
     {
         return computation.Compute(CursorContext.For(0, "army", 0, topHovered, topNeighbour, 2, mode));
+    }
+
+    /// <summary>The neighborhood graph: a five-territory chain whose edges are every transition
+    /// kind the scan must count - land, cliff, sea, closed border - with 3 settlement-site tiles
+    /// per territory and literal scores per tile.</summary>
+    private static GraphSurface Chain()
+    {
+        var chain = Camp(tiles: 3, scores: new[] { 30, 10, 20 }); // territory 0: 100, 101, 102
+        Score(chain, 1, new[] { 50, 50, 10 }); // territory 1: a rank-1 tie set
+        Score(chain, 2, new[] { 10, 90, 20 }); // territory 2: a single rank-1 tile
+        Score(chain, 3, new[] { 70, 10, 20 }); // territory 3
+        Score(chain, 4, new[] { 60, 20, 10 }); // territory 4
+        Link(chain, 0, 1, TerritoryTransition.Open);
+        Link(chain, 1, 2, TerritoryTransition.Cliffs);
+        Link(chain, 2, 3, TerritoryTransition.Coast);
+        Link(chain, 3, 4, TerritoryTransition.Closed);
+        return chain;
+    }
+
+    private static void Score(GraphSurface surface, int territory, int[] scores)
+    {
+        for (int t = 0; t < scores.Length; t++) surface.ScoreByTile[100 + territory * 10 + t] = scores[t];
+    }
+
+    /// <summary>A scan pass over the hovered territory 0 with the given quotas and hop count.</summary>
+    private static Pick[] Scan(GraphSurface surface, int topHovered, int topNeighbour, int rangeLevels)
+    {
+        return ScanOn(new PickComputation(surface), surface, 0, topHovered, topNeighbour, rangeLevels);
+    }
+
+    private static Pick[] ScanOn(PickComputation computation, GraphSurface surface, int hovered,
+        int topHovered, int topNeighbour, int rangeLevels)
+    {
+        return computation.Compute(CursorContext.For(hovered, "army", 0, topHovered, topNeighbour,
+            rangeLevels, ArmyActionType.CreateCamp));
+    }
+
+    /// <summary>How many distinct territories a published set covers.</summary>
+    private static int TerritoriesOf(Pick[] picks)
+    {
+        var territories = new HashSet<int>();
+        if (picks != null)
+            for (int i = 0; i < picks.Length; i++) territories.Add((picks[i].Tile - 100) / 10);
+        return territories.Count;
+    }
+
+    private static int CountTerritory(Pick[] picks, int territory)
+    {
+        int count = 0;
+        if (picks != null)
+            for (int i = 0; i < picks.Length; i++)
+                if ((picks[i].Tile - 100) / 10 == territory) count++;
+        return count;
+    }
+
+    /// <summary>Everything the surface logs while the pass runs, so a logged failure is
+    /// assertable.</summary>
+    private static string Capture(Action pass)
+    {
+        var buffer = new StringWriter();
+        var stdout = Console.Out;
+        Console.SetOut(buffer);
+        pass();
+        Console.SetOut(stdout);
+        return buffer.ToString();
     }
 
     private static int[] TilesOf(Pick[] picks)
@@ -428,7 +682,8 @@ internal static class Program
 
     private static int[] IndexesOf(GraphSurface surface, int territory)
     {
-        var edges = surface.AdjacentTerritories(territory);
+        Territory.Adjacency[] edges;
+        if (!surface.TryGetAdjacentTerritories(territory, out edges)) return new int[0];
         var indexes = new int[edges.Length];
         for (int i = 0; i < edges.Length; i++) indexes[i] = edges[i].TerritoryIndex;
         Array.Sort(indexes);
