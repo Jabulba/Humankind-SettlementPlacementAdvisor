@@ -8,10 +8,11 @@ using Amplitude.Mercury.Simulation; // CustomTileIndexArea
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Puts picks into the settlement placement evaluation for the FIMS pins and suppresses the
-    /// vanilla glyphs. Settlement placement writes only: FoundCity and FoundCityWithSettler share
-    /// this evaluation type, so the mutating entry point guards on SettleType and a city
-    /// activation only scrubs a tail left by an earlier settlement session.
+    /// Puts picks into the settlement placement evaluation for the FIMS pins: the advisor-written
+    /// slots carry the shown set, so a published member is the entry's Showable flag and vanilla's
+    /// own entries keep their own glyphs. Settlement placement writes only: FoundCity and
+    /// FoundCityWithSettler share this evaluation type, so the mutating entry point guards on
+    /// SettleType and a city activation only scrubs a tail left by an earlier settlement session.
     ///
     /// The tail is one fixed window reserved at activation. TailStart is the cursor slot,
     /// vanilla's append point after a full-eval Initialize; slots above it hold the picks,
@@ -97,9 +98,11 @@ namespace SettlementPlacementAdvisor
         }
 
         /// <summary>
-        /// Rewrite the pick slots in place (ascending unique tiles, simulation thread). If the
-        /// cursor tile is a pick, repoint CurrentPositionIndex at that pick's slot so the ghost
-        /// stays on the cursor tile. Non-settlement evaluations return without writing.
+        /// Rewrite the pick slots in place (ascending unique tiles, simulation thread): each
+        /// member's entry is written Showable, so the glyph set is the published membership, and
+        /// the slots this refresh released are zero-filled. If the cursor tile is a pick, repoint
+        /// CurrentPositionIndex at that pick's slot so the ghost stays on the cursor tile.
+        /// Non-settlement evaluations return without writing.
         /// </summary>
         public void Write(CampPlacementEvaluation evaluation, Pick[] picks, int cursorTile)
         {
@@ -130,25 +133,27 @@ namespace SettlementPlacementAdvisor
                 evaluation.ConditionalFlagsTileIndexes = flags;
             }
 
-            // Suppress vanilla glyphs over every live entry (vanilla space + old tail slots).
-            for (int i = 0; i < count; i++)
-            {
-                var vanilla = tiles[i];
-                if (vanilla.Showable)
-                {
-                    vanilla.Showable = false;
-                    tiles[i] = vanilla;
-                }
-            }
-
             // Picks go at invariant slots; TailStart itself is vanilla's cursor entry slot.
+            // Showable is advisor-written membership: the published set is the only glyph source
+            // in the advisor's slots, and vanilla's own entries keep their own glyphs.
             for (int i = 0; i < picks.Length; i++)
             {
                 var entry = picks[i].Data;
-                entry.Showable = false; // advisor stars, not vanilla glyphs
+                entry.Showable = true;
                 tiles[m_TailStart + 1 + i] = entry;
                 if (flags != null)
                     flags[m_TailStart + 1 + i] = DistrictPlacementConditionFlags.None;
+            }
+
+            // Slots the previous refresh owned and this one released: zeroed, so no stale pick
+            // keeps a glyph, a pin slot, or a score inside the live count.
+            for (int i = tailEnd; i < needed; i++)
+            {
+                var released = default(DistrictPlacementEvaluation.ValidTile);
+                released.Initialize(-1);
+                tiles[i] = released;
+                if (flags != null)
+                    flags[i] = DistrictPlacementConditionFlags.None;
             }
 
             Thread.MemoryBarrier(); // release: tail entries are visible before the count rises
