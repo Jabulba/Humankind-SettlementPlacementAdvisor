@@ -72,3 +72,17 @@ Types/scopes are closed sets; `fix` requires a Cause/Fix/Ruled out/Verification 
 chars; no attribution trailers. Pushing `main`/opening a PR runs commit lint, the Release build,
 and both harnesses. Release = annotated `vX.Y.Z` tag; MinVer stamps the version, git-cliff
 generates notes. See `CONTRIBUTING.md` for the exact scopes and release steps.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `Jabulba/Humankind-SettlementPlacementAdvisor`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: the five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) used as-is. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.
