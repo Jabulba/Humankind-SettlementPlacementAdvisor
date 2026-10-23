@@ -59,9 +59,9 @@ namespace SettlementPlacementAdvisor
         /// <summary>
         /// Per-refresh entry (the UpdateCurrentPosition postfix, after vanilla's own refresh): the
         /// admission set the pipeline computed for the cursor territory, written into the tail and
-        /// published. A zero-pick
-        /// result deactivates - an ACTIVE empty set would suppress vanilla's pins without replacing
-        /// them - and takes the advisor's tail contribution with it.
+        /// published. A zero-pick result publishes INACTIVE, which displays nothing: stars cleared,
+        /// no pin, and no vanilla surface taking the advice's place - and it takes the advisor's
+        /// tail contribution with it.
         /// </summary>
         public void Run(CampPlacementEvaluation evaluation, int cursorTile, SimulationEntityGUID armyGuid)
         {
@@ -73,7 +73,7 @@ namespace SettlementPlacementAdvisor
                     Publish(picks);
                     break;
                 case Outcome.NoPicks:
-                    PublishEmpty(evaluation); // no glyphs, no pick entries, gate back to vanilla
+                    PublishEmpty(evaluation); // no glyphs, no pick entries, no pins
                     break;
                 default:
                     Deactivate(); // vanilla's mode: its entries and glyphs stay exactly as they are

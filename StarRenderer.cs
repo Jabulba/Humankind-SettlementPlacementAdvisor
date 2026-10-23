@@ -55,8 +55,8 @@ namespace SettlementPlacementAdvisor
     /// Draws the published pick set on the pick canvas, driven by the cursor snapshot's
     /// presentation event. Entering tiles start fx, leaving tiles stop fx, retained tiles keep
     /// their fx. Membership is answered from the captured snapshot, so a mid-pass publish
-    /// cannot tear the reconcile. Vanilla glyphs are suppressed by the writer; the cursor ghost
-    /// stays vanilla.
+    /// cannot tear the reconcile. Stars are the shown set's first rendering; the cursor ghost
+    /// and vanilla's own glyphs stay vanilla's.
     /// </summary>
     internal sealed class StarRenderer
     {

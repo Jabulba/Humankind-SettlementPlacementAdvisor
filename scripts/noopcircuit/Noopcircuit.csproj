@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- NO-OP CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet and both
-       Harmony postfixes over a synthetic surface and snapshot. Asserts the advisor writes
-       nothing on a non-settlement evaluation, keeps its settlement tail, and hands the pin
-       gate back to vanilla when inactive. Not part of the mod build; Plugin.cs is replaced by
-       PluginShim.cs. -->
+  <!-- NO-OP / SHOWN-SET CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet,
+       both Harmony postfixes and vanilla's own pin filter chain over a synthetic surface and
+       snapshot. Asserts the advisor writes nothing on a mode it does not own, keeps its
+       settlement tail, publishes its membership as the shown set, and displays nothing when
+       INACTIVE. Not part of the mod build; Plugin.cs is replaced by PluginShim.cs. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

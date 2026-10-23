@@ -42,10 +42,10 @@ the domain and the modules at its seams.
   pick set. The only channel from the simulation thread to the presentation thread.
 - **Publish**: swap a new pick set into the volatile channel. Only a pick-content change
   publishes; identical content bumps no version. An INACTIVE publish is the advisor's
-  deactivation: stars stop and the FIMS pin gate returns to vanilla. It is the only thing
-  the advisor does on a placement mode it does not own, and on a zero-pick result: an ACTIVE
-  empty set would suppress vanilla's pins without replacing them, so nothing-to-advise
-  publishes inactive.
+  deactivation: in a mode the advisor owns it displays nothing - stars stop and no pin shows,
+  and no vanilla surface takes the advice's place. It is the only thing the advisor does on a
+  zero-pick result. On a placement mode it does not own, the mode keeps its vanilla surface,
+  pin gate included.
 - **Tail**: the fixed slot window in `CampPlacementEvaluation.ValidTiles` owned by the
   evaluation writer. The base slot is the cursor slot, reserved at the activation baseline the
   takeover runs vanilla's `Initialize` at; slots above it hold picks, rewritten in place at
@@ -83,7 +83,11 @@ the domain and the modules at its seams.
   admission. Admission is the territory's quota (`TopHovered` on the hovered territory,
   `TopNeighbour` on every other) plus the full top tie set: no tie cap, no star cap.
 - **Shown set**: the published pick set, equal to the merged admission set of a scan
-  pass. Stars and pins are its renderings; nothing outside the shown set displays.
+  pass. Stars and pins are its renderings; nothing outside the shown set displays. The pin
+  gate answers membership plus vanilla's hovered rule (the cursor slot's gate result admits
+  pins unless it reports a failure other than `NotEnoughInfluence`), and vanilla's generic
+  pin filters - tile index, exploration, zero gains and losses, on-screen culling - stay
+  unoverridden, so a zero-yield or off-screen member shows its star and no pin.
 - **Cursor slot**: the advisor-owned `TailStart` entry of the tail, carrying the hovered
   tile's gate result: the single surviving path to the ghost, the territory highlight,
   and the settlement mouse marker.
@@ -114,9 +118,10 @@ the domain and the modules at its seams.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
   evaluation. Reserves the activation baseline at the takeover (vanilla's `Initialize`, the
   tail-reservation point) and the tail window at activation; writes pick slots in place,
-  barriers, then raises `ValidTileCount`; keeps every slot above the cursor slot scrubbed when
-  the advisor has no pick for it; owns `CurrentPositionIndex` when the cursor tile is a pick;
-  suppresses vanilla's top-2 glyphs. Settlement placement writes only: the mutating entry point
+  barriers, then raises `ValidTileCount`; writes every member's entry `Showable`, so the glyph
+  set equals the shown set, and leaves vanilla's own glyph flags alone; keeps every slot above
+  the cursor slot scrubbed when the advisor has no pick for it; owns `CurrentPositionIndex`
+  when the cursor tile is a pick. Settlement placement writes only: the mutating entry point
   guards on `SettleType`, and city activation only releases the advisor's own slots.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
@@ -131,6 +136,6 @@ the domain and the modules at its seams.
 - Crossing: one volatile reference swap to an immutable pick set. Presentation readers
   capture the set once per pass and never query the live channel twice in one pass.
 - The evaluation array is shared by reference, not copied. The writer's publish order (write
-  slots, barrier, raise count) keeps the ghost, settle action, best-placement cascade and
-  pins coherent. The only index it repoints is `CurrentPositionIndex`, when the cursor tile
-  is a pick.
+  slots, barrier, raise count) keeps the ghost, the settle action and the pins coherent. The
+  only index it repoints is `CurrentPositionIndex`, when the cursor tile is a pick. The
+  best-placement cascade is retired: the arrays stay unpopulated and no advisor code reads them.
