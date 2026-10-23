@@ -153,10 +153,11 @@ internal sealed class CountingCanvas : PickCanvas
 /// DEBUG [noopc] write-side contract harness (SPEC section 6). All three settle types share
 /// CampPlacementEvaluation, and the city no-op contract is retired: the advisor writes through the
 /// active mode's pipeline into that mode's evaluation only, so the surviving write-side rows are
-/// tail reservation, the barrier-then-count order, the scrub on every activation, the slot
-/// stability, and the shown set. Checks compare a full signature of the mutable state before and
-/// after, catching any mutation, not just known ones. Camp placement and city founding are the
-/// wired controls: tail reserved, picks written Showable, vanilla's own glyphs untouched, stars and
+/// tail reservation from the config-derived capacity, the barrier-then-count order, the full-region
+/// scrub on every activation, the incremental zero-fill, the slot stability, and the shown set.
+/// Checks compare a full signature of the mutable state before and after, catching any mutation,
+/// not just known ones. Camp placement, city founding and settler founding are the wired controls:
+/// tail reserved, picks written Showable, vanilla's own glyphs untouched, stars and
 /// the pin gate answering the published membership, the cursor slot from the mode gate call with no
 /// mask. A mode the mode-policy table has not wired is the one that writes nothing. The pin gate is
 /// driven through the real postfix, and vanilla's unpatched pin filter chain is driven directly.
@@ -164,6 +165,16 @@ internal sealed class CountingCanvas : PickCanvas
 internal static class Program
 {
     private static int s_Failures;
+
+    // Hand-computed from the derivation SPEC section 6 row 1 documents: the neighborhood territory
+    // budget (the hovered territory plus 8 fan-out territories per hop beyond level 1) times the
+    // per-territory worst case (the larger quota plus the 8-slot tie headroom).
+    private const int DefaultTailCapacity = 90; // quotas 2/1, 2 hops: 9 x (2 + 8)
+    private const int WideTailCapacity = 170;   // quotas 2/1, 3 hops: 17 x (2 + 8)
+    private const int RoomyQuotaCapacity = 117; // quotas 5/3, 2 hops: 9 x (5 + 8)
+    private const int SingleHopCapacity = 9;    // quotas 1/1, 1 hop: 1 x (1 + 8)
+    private const int GrownPickCount = 200;     // past every reserve above: the grow-on-demand case
+    private const int ReserveCeiling = 4096;    // the saturation point of the derived reserve
 
     private static void Check(string name, bool ok)
     {
@@ -350,9 +361,8 @@ internal static class Program
     }
 
     /// <summary>
-    /// Every advisor-owned slot above the live count - the cursor slot plus TailCapacity slots, the
-    /// window the writer reserves - is the zeroed shape: no tile, no FIMS, no glyph. SPEC section 6
-    /// row 3, the advisor's duty from the reservation on.
+    /// Every advisor-owned slot above the live count, up to `windowEnd`, is the zeroed shape: no
+    /// tile, no FIMS, no glyph. SPEC section 6 row 3, the advisor's duty from the reservation on.
     /// </summary>
     private static bool ZeroFilledAboveCount(CampPlacementEvaluation e, int count, int windowEnd)
     {
@@ -497,7 +507,7 @@ internal static class Program
         var settlementGlyphs = VanillaGlyphs(settlement, baseline);
         plugin.Writer.NoteActivation(settlement);
         Check("CreateCamp activation reserves the tail window",
-            settlement.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity);
+            settlement.ValidTiles.Length == baseline + 1 + DefaultTailCapacity);
         Check("the cursor slot is the activation baseline",
             plugin.Writer.CursorSlotIndex(settlement) == baseline);
 
@@ -522,8 +532,7 @@ internal static class Program
         // itself and points the cursor index at it, and the slots this refresh releases zero-fill
         // above the live count (SPEC section 6 row 3).
         Check("every advisor slot above the live count is zeroed",
-            ZeroFilledAboveCount(settlement, settlement.ValidTileCount,
-                plugin.Writer.CursorSlotIndex(settlement) + 1 + EvaluationWriter.TailCapacity));
+            ZeroFilledAboveCount(settlement, settlement.ValidTileCount, settlement.ValidTiles.Length));
 
         // A smaller admission set releases slots. The writer zero-fills what it released, so
         // inside the live count the published membership stays the only live entry set.
@@ -643,7 +652,7 @@ internal static class Program
         var campUntouched = Signature(settlement);
         plugin.Writer.NoteActivation(city);
         Check("FoundCity activation reserves the tail window on its own evaluation",
-            city.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity
+            city.ValidTiles.Length == baseline + 1 + DefaultTailCapacity
             && plugin.Writer.CursorSlotIndex(city) == baseline);
         Check("a city activation claims no tail on a foreign evaluation",
             Signature(settlement) == campUntouched);
@@ -683,8 +692,7 @@ internal static class Program
         Check("city pins follow the published membership",
             GateAnswer(cityTiles[0]) && GateAnswer(cityTiles[1]) && !GateAnswer(bestTile));
         Check("every city advisor slot above the live count is zeroed",
-            ZeroFilledAboveCount(city, city.ValidTileCount,
-                citySlot + 1 + EvaluationWriter.TailCapacity));
+            ZeroFilledAboveCount(city, city.ValidTileCount, city.ValidTiles.Length));
 
         // The unaffordable city pick (SPEC section 5 row 7): the same star and the same pin an
         // affordable pick has, and the founding failure reaching the player on hover through the
@@ -781,6 +789,16 @@ internal static class Program
         plugin.Writer.NoteActivation(settlement);
         Check("camp activation releases the city tail on the shared array",
             ReleasedTail(settlement, baseline));
+        settlement.SettleType = ArmyActionType.FoundCityWithSettler;
+        settlement.ValidTileCount = baseline; // the settler activation on the same shared evaluation
+        plugin.Writer.NoteActivation(settlement);
+        Check("settler activation releases the camp tail on the shared array",
+            ReleasedTail(settlement, baseline));
+        settlement.SettleType = ArmyActionType.CreateCamp;
+        settlement.ValidTileCount = baseline; // and back to camp: the third leg of the switch
+        plugin.Writer.NoteActivation(settlement);
+        Check("camp activation releases the settler tail on the shared array",
+            ReleasedTail(settlement, baseline));
 
         // D2b. Settler city founding (ticket 18) is a wired row of the mode-policy table. The
         // settler session publishes an admission set under the same admission and presentation
@@ -793,7 +811,7 @@ internal static class Program
         var campUntouched2 = Signature(settlement);
         plugin.Writer.NoteActivation(settler);
         Check("Settler activation reserves the tail window on its own evaluation",
-            settler.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity
+            settler.ValidTiles.Length == baseline + 1 + DefaultTailCapacity
             && plugin.Writer.CursorSlotIndex(settler) == baseline);
         Check("a settler activation claims no tail on a foreign evaluation",
             Signature(settlement) == campUntouched2);
@@ -834,8 +852,7 @@ internal static class Program
         Check("settler pins follow the published membership",
             GateAnswer(settlerTiles[0]) && GateAnswer(settlerTiles[1]) && !GateAnswer(bestTile));
         Check("every settler advisor slot above the live count is zeroed",
-            ZeroFilledAboveCount(settler, settler.ValidTileCount,
-                settlerSlot + 1 + EvaluationWriter.TailCapacity));
+            ZeroFilledAboveCount(settler, settler.ValidTileCount, settler.ValidTiles.Length));
         int settlerStars = settlerTiles.Length;
 
         // The settler tile gate with the same money/influence mask (SPEC section 3): an
@@ -990,7 +1007,7 @@ internal static class Program
         Check("camp takeover skips vanilla's full camp evaluation", !vanillaRuns);
         Check("camp takeover stamps the mode on the evaluation", scanEval.SettleType == ArmyActionType.CreateCamp);
         Check("camp takeover reserves the activation baseline",
-            scanEval.ValidTileCount == 0 && scanEval.ValidTiles.Length >= 1 + EvaluationWriter.TailCapacity);
+            scanEval.ValidTileCount == 0 && scanEval.ValidTiles.Length == 1 + DefaultTailCapacity);
         Check("camp takeover publishes the admission set", !Inactive() && AscendingUnique(PickSet.Current.Tiles));
         Check("camp takeover writes no pick entries", ScanTailHits(scanEval, PickSet.Current.Tiles, 1) == 0);
         Check("camp takeover leaves the best-camp arrays retired",
@@ -1043,7 +1060,7 @@ internal static class Program
         Check("the city takeover stamps FoundCity on the evaluation",
             cityScan.SettleType == ArmyActionType.FoundCity);
         Check("the city takeover reserves the activation baseline",
-            cityScan.ValidTileCount == 0 && cityScan.ValidTiles.Length >= 1 + EvaluationWriter.TailCapacity);
+            cityScan.ValidTileCount == 0 && cityScan.ValidTiles.Length == 1 + DefaultTailCapacity);
         Check("the city takeover publishes its admission set",
             !Inactive() && AscendingUnique(PickSet.Current.Tiles));
         Check("the city takeover writes no pick entries",
@@ -1174,7 +1191,7 @@ internal static class Program
             && scanEval.InstantUnitCost == (FixedPoint)8);
         Check("the cursor slot carries no glyph of its own", !slotEntry.Showable);
         Check("the advisor writes the cursor slot once: the array stays at the reserved window",
-            scanEval.ValidTiles.Length == cursorSlot + 1 + EvaluationWriter.TailCapacity);
+            scanEval.ValidTiles.Length == cursorSlot + 1 + DefaultTailCapacity);
         // The gate reads the presentation evaluation of the snapshot - the same instance a
         // refresh writes in the game, so the harness points it at the evaluation under test.
         snapshot.PresentationData.PlacementEvaluation = scanEval;
@@ -1206,8 +1223,7 @@ internal static class Program
             PickSet.Current.Tiles.Length == hoveredSet.Length && ShowableIsMembership(scanEval, 0, hoveredSet));
         surface.TileGateFlags.Clear();
         Check("every advisor slot above the live count is zeroed, cursor slot window included",
-            ZeroFilledAboveCount(scanEval, scanEval.ValidTileCount,
-                cursorSlot + 1 + EvaluationWriter.TailCapacity));
+            ZeroFilledAboveCount(scanEval, scanEval.ValidTileCount, scanEval.ValidTiles.Length));
         var keptVanilla = NewEvaluation(ArmyActionType.Ransack, baseline); // a mode the table has not wired
         var keptSignature = Signature(keptVanilla);
         Check("a mode the table has not wired keeps vanilla's own refresh, its own cursor entry included",
@@ -1219,6 +1235,129 @@ internal static class Program
         Check("a cursor with no territory scrubs the cursor slot and points the index at nothing",
             scanEval.CurrentPositionIndex == -1 && scanEval.ValidTiles[cursorSlot].TileIndex == -1
             && scanEval.SettleFailure == ArmyActionFailureFlags.None);
+        // I. Tail capacity from config, full-region scrub, incremental zero-fill, slot stability
+        // (ticket 19, SPEC section 6 rows 1-4). The derivation is the worst-case admission set for
+        // the configured hops: the neighborhood territory budget (the hovered territory plus 8
+        // fan-out territories per hop beyond level 1) times the per-territory worst case (the larger
+        // quota plus the 8-slot tie headroom).
+        Check("derived tail capacity: quotas 2/1 with 1 hop is 1 territory x (2 + 8)",
+            AdvisorConfig.TailCapacityFor(2, 1, 1) == 10);
+        Check("derived tail capacity: quotas 2/1 with 2 hops is 9 territories x (2 + 8)",
+            AdvisorConfig.TailCapacityFor(2, 1, 2) == DefaultTailCapacity);
+        Check("derived tail capacity: quotas 2/1 with 3 hops is 17 territories x (2 + 8)",
+            AdvisorConfig.TailCapacityFor(2, 1, 3) == WideTailCapacity);
+        Check("derived tail capacity: quotas 5/3 with 2 hops is 9 territories x (5 + 8)",
+            AdvisorConfig.TailCapacityFor(5, 3, 2) == RoomyQuotaCapacity);
+        Check("derived tail capacity: quotas clamp to 1 and 1 hop is 1 territory x (1 + 8)",
+            AdvisorConfig.TailCapacityFor(0, 0, 1) == SingleHopCapacity
+            && AdvisorConfig.TailCapacityFor(-3, -1, 0) == SingleHopCapacity);
+        Check("derived tail capacity grows with the hop count and with the quota",
+            AdvisorConfig.TailCapacityFor(2, 1, 3) > AdvisorConfig.TailCapacityFor(2, 1, 2)
+            && AdvisorConfig.TailCapacityFor(5, 1, 2) > AdvisorConfig.TailCapacityFor(2, 1, 2));
+        Check("derived tail capacity saturates at the pre-allocation ceiling on a 100000-hop config",
+            AdvisorConfig.TailCapacityFor(1, 1, 100000) == ReserveCeiling);
+
+        // The activation reserves the derived window and nothing more: the reserve follows the config
+        // the activation reads, so a wider scan or a bigger quota widens the next window.
+        var sized = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(sized);
+        Check("the activation reserves the config-derived window: quotas 2/1, 2 hops, 6 + 1 + 90",
+            sized.ValidTiles.Length == baseline + 1 + DefaultTailCapacity
+            && plugin.Writer.CursorSlotIndex(sized) == baseline);
+
+        Plugin.CfgRangeLevels.Value = 3;
+        var wide = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(wide);
+        Check("a 3-hop config reserves its own derived window: 6 + 1 + 170",
+            wide.ValidTiles.Length == baseline + 1 + WideTailCapacity);
+        Plugin.CfgRangeLevels.Value = 2;
+
+        Plugin.CfgTopHovered.Value = 5;
+        Plugin.CfgTopNeighbour.Value = 3;
+        var roomy = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(roomy);
+        Check("quotas 5/3 widen the derived window: 6 + 1 + 117",
+            roomy.ValidTiles.Length == baseline + 1 + RoomyQuotaCapacity);
+        Plugin.CfgTopHovered.Value = 2;
+        Plugin.CfgTopNeighbour.Value = 1;
+
+        // Grow-on-demand: an admission set past the derived reserve extends the reserved region, and
+        // the mode switch that follows scrubs the whole grown region in every mode - a grown tail
+        // left under-scrubbed is exactly the phantom recommendation this row bans.
+        Plugin.CfgTopHovered.Value = 1;
+        Plugin.CfgTopNeighbour.Value = 1;
+        Plugin.CfgRangeLevels.Value = 1;
+        var grown = NewEvaluation(ArmyActionType.CreateCamp, baseline); // 38 slots: vanilla's own shape
+        var grownTailBefore = SlotsSignature(grown, baseline + 1 + SingleHopCapacity, grown.ValidTiles.Length);
+        plugin.Writer.NoteActivation(grown);
+        Check("quotas 1/1 with 1 hop reserve the 1-territory window: scrubbed [6, 16), vanilla's tail above it intact",
+            ScrubbedRegion(grown, baseline, baseline + 1 + SingleHopCapacity)
+            && SlotsSignature(grown, baseline + 1 + SingleHopCapacity, grown.ValidTiles.Length) == grownTailBefore);
+        var pastTheReserve = Picks(600, GrownPickCount); // far past the 9-slot reserve
+        plugin.Writer.Write(grown, pastTheReserve, AnsweredCursor(600));
+        Check("grow-on-demand extends the window to the written slots, the count rising over written slots",
+            grown.ValidTiles.Length == baseline + 1 + GrownPickCount
+            && grown.ValidTileCount == baseline + 1 + GrownPickCount
+            && NoHolesBelowCount(grown, baseline));
+        Check("the cursor slot keeps its invariant index through a grown write",
+            plugin.Writer.CursorSlotIndex(grown) == baseline && grown.CurrentPositionIndex == baseline);
+
+        grown.SettleType = ArmyActionType.FoundCity;
+        grown.ValidTileCount = baseline;
+        plugin.Writer.NoteActivation(grown);
+        Check("a city activation scrubs the full region a grown camp tail reserved", ReleasedTail(grown, baseline));
+        grown.SettleType = ArmyActionType.FoundCityWithSettler;
+        grown.ValidTileCount = baseline;
+        plugin.Writer.NoteActivation(grown);
+        Check("a settler activation scrubs the full region a grown city tail reserved", ReleasedTail(grown, baseline));
+        grown.SettleType = ArmyActionType.CreateCamp;
+        grown.ValidTileCount = baseline;
+        plugin.Writer.NoteActivation(grown);
+        Check("a camp activation scrubs the full region a grown settler tail reserved", ReleasedTail(grown, baseline));
+
+        // Incremental zero-fill (SPEC section 6 row 3): a refresh zeroes the slots it released and
+        // nothing wider. The slots above the reserved window are vanilla's append space: the writer
+        // owns the window, never the array length, so they survive every refresh.
+        var sweep = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        GrowWithSentinels(sweep, baseline + 1 + SingleHopCapacity + 120);
+        var aboveWindowBefore = SlotsSignature(sweep, baseline + 1 + SingleHopCapacity, sweep.ValidTiles.Length);
+        var vanillaGlyphsBefore = VanillaGlyphs(sweep, baseline);
+        plugin.Writer.NoteActivation(sweep); // a 16-slot window inside a 136-slot array
+        Check("reserving a window inside a longer array zeroes the window, not the array",
+            ScrubbedRegion(sweep, baseline, baseline + 1 + SingleHopCapacity)
+            && SlotsSignature(sweep, baseline + 1 + SingleHopCapacity, sweep.ValidTiles.Length) == aboveWindowBefore
+            && VanillaGlyphs(sweep, baseline) == vanillaGlyphsBefore);
+        plugin.Writer.Write(sweep, Picks(700, SingleHopCapacity), AnsweredCursor(700)); // the window, full
+        plugin.Writer.Write(sweep, Picks(700, 3), AnsweredCursor(700)); // 6 slots released
+        Check("a refresh zeroes exactly the slots it released",
+            ScrubbedRegion(sweep, baseline + 1 + 3, baseline + 1 + SingleHopCapacity));
+        Check("no full-array sweep: vanilla's slots above the reserved window survive every refresh",
+            SlotsSignature(sweep, baseline + 1 + SingleHopCapacity, sweep.ValidTiles.Length) == aboveWindowBefore
+            && VanillaGlyphs(sweep, baseline) == vanillaGlyphsBefore);
+
+        // Slot stability (SPEC section 6 row 2): the pick slots are the indices vanilla's pins bind
+        // to, so a recomputed set lands on the same slots and a retained pick never rebinds.
+        var stable = NewEvaluation(ArmyActionType.CreateCamp, baseline);
+        plugin.Writer.NoteActivation(stable);
+        surface.DistrictFrame++;
+        Refresh(stable, 131);
+        var stableFirst = PickSet.Current.Tiles;
+        int stableSlot = plugin.Writer.CursorSlotIndex(stable);
+        int stableLength = stable.ValidTiles.Length;
+        Check("the first refresh writes each pick at its invariant slot after the cursor slot",
+            SlotIndexOf(stable, stableFirst, stableSlot + 1) == InvariantSlots(stableFirst, stableSlot + 1));
+        surface.DistrictFrame++; // a cache-miss refresh of the same admission set
+        Refresh(stable, 131);
+        Check("retained picks keep their slot indices across refreshes, and the cursor slot keeps its index",
+            plugin.Writer.CursorSlotIndex(stable) == stableSlot
+            && stable.ValidTiles.Length == stableLength
+            && stable.CurrentPositionIndex == stableSlot
+            && SlotIndexOf(stable, PickSet.Current.Tiles, stableSlot + 1)
+               == InvariantSlots(PickSet.Current.Tiles, stableSlot + 1));
+        Plugin.CfgTopHovered.Value = 2;
+        Plugin.CfgTopNeighbour.Value = 1;
+        Plugin.CfgRangeLevels.Value = 2;
+
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
         return s_Failures == 0 ? 0 : 1;
     }
@@ -1260,5 +1399,101 @@ internal static class Program
             if (f != null) { f.SetValue(target, value); return; }
         }
         throw new Exception("snapshot flag not found: " + field);
+    }
+
+    /// <summary>Picks the pipeline never saw, written straight through the writer's public entry
+    /// point: grow-on-demand is unreachable from the 4-territory synthetic map.</summary>
+    private static Pick[] Picks(int firstTile, int count)
+    {
+        var picks = new Pick[count];
+        for (int i = 0; i < count; i++)
+        {
+            var entry = default(DistrictPlacementEvaluation.ValidTile);
+            entry.Initialize(firstTile + i);
+            picks[i].Tile = firstTile + i;
+            picks[i].Score = (FixedPoint)(1000 - i);
+            picks[i].Data = entry;
+        }
+        return picks;
+    }
+
+    /// <summary>An answering cursor slot for a direct writer call.</summary>
+    private static CursorSlot AnsweredCursor(int tileIndex)
+    {
+        var entry = default(DistrictPlacementEvaluation.ValidTile);
+        entry.Initialize(tileIndex);
+        var slot = new CursorSlot();
+        slot.Answered = true;
+        slot.Tile = tileIndex;
+        slot.Entry = entry;
+        return slot;
+    }
+
+    /// <summary>The array grown to `length` with vanilla's sentinel shape in every new slot, so a
+    /// write, a scrub or a sweep into vanilla's append space is visible in the signature.</summary>
+    private static void GrowWithSentinels(CampPlacementEvaluation e, int length)
+    {
+        var tiles = e.ValidTiles;
+        Array.Resize(ref tiles, length);
+        for (int i = e.ValidTiles.Length; i < length; i++)
+        {
+            var entry = default(DistrictPlacementEvaluation.ValidTile);
+            entry.Initialize(-1000 - i);
+            tiles[i] = entry;
+        }
+        e.ValidTiles = tiles;
+        var flags = e.ConditionalFlagsTileIndexes;
+        Array.Resize(ref flags, length);
+        e.ConditionalFlagsTileIndexes = flags;
+    }
+
+    /// <summary>The tile-and-glyph shape of slots [from, to): the slots above the writer's window.</summary>
+    private static string SlotsSignature(CampPlacementEvaluation e, int from, int to)
+    {
+        var sb = new StringBuilder();
+        for (int i = from; i < System.Math.Min(to, e.ValidTiles.Length); i++)
+            sb.Append('|').Append(e.ValidTiles[i].TileIndex).Append(e.ValidTiles[i].Showable ? 'S' : '-');
+        return sb.ToString();
+    }
+
+    /// <summary>Every slot in [from, to) is the scrubbed shape: no tile, no glyph.</summary>
+    private static bool ScrubbedRegion(CampPlacementEvaluation e, int from, int to)
+    {
+        for (int i = from; i < System.Math.Min(to, e.ValidTiles.Length); i++)
+            if (e.ValidTiles[i].TileIndex != -1 || e.ValidTiles[i].Showable) return false;
+        return true;
+    }
+
+    /// <summary>No scrubbed slot below the live count in the advisor's slots: the count rises only
+    /// over written entries (SPEC section 6 row 2).</summary>
+    private static bool NoHolesBelowCount(CampPlacementEvaluation e, int baseline)
+    {
+        for (int i = baseline + 1; i < e.ValidTileCount; i++)
+            if (e.ValidTiles[i].TileIndex == -1) return false;
+        return true;
+    }
+
+    /// <summary>The slot each member occupies, as a tile@slot list.</summary>
+    private static string SlotIndexOf(CampPlacementEvaluation e, int[] members, int from)
+    {
+        var sb = new StringBuilder();
+        for (int t = 0; t < members.Length; t++)
+        {
+            var at = -1;
+            for (int i = from; i < e.ValidTiles.Length; i++)
+                if (e.ValidTiles[i].TileIndex == members[t]) { at = i; break; }
+            sb.Append('|').Append(members[t]).Append('@').Append(at);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>The slots SPEC section 6 row 2 fixes: one per pick, in the published order,
+    /// starting at the slot after the cursor slot.</summary>
+    private static string InvariantSlots(int[] members, int first)
+    {
+        var sb = new StringBuilder();
+        for (int t = 0; t < members.Length; t++)
+            sb.Append('|').Append(members[t]).Append('@').Append(first + t);
+        return sb.ToString();
     }
 }

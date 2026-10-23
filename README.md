@@ -124,7 +124,9 @@ and vanilla's full settlement evaluation is never called from that snapshot. It 
    territory, using a per-territory cache keyed by the frames the rules read, the world claim
    frame included, so a claim, unclaim, owner steal, exploration or patrol change recomputes the
    territory it changed.
-6. Writes the admitted tiles into a fixed tail of that mode's evaluation, each entry shown,
+6. Writes the admitted tiles into the tail of that mode's evaluation - a window sized at the
+   activation from your `RangeLevels` and quotas, tie headroom included, and grown when a published
+   set needs more slots - each entry shown,
    then publishes an immutable pick set for the presentation side. Each refresh also writes
    the cursor slot - the hovered tile's own entry, with the mode gate call's failure flags and its
    money, influence and unit costs - so the game's mouse marker, the red ghost, and the hovered-pin
@@ -137,9 +139,10 @@ and vanilla's full settlement evaluation is never called from that snapshot. It 
    the window, gets its star and no pin.
 
 Writes happen only through the active mode's advisor pipeline, into that mode's evaluation: the
-`CreateCamp` and `FoundCity` rows write their own session's evaluation, and an activation scrubs the
-tail a previous mode's session left on the shared evaluation. A mode the table has not wired writes
-nothing at all.
+`CreateCamp`, `FoundCity` and `FoundCityWithSettler` rows write their own session's evaluation, and
+an activation scrubs the whole region a previous mode's session reserved on the shared evaluation,
+so no settlement entry survives a mode switch as a phantom recommendation. A mode the table has not
+wired writes nothing at all.
 
 ## Compatibility
 

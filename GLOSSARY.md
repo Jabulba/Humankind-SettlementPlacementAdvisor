@@ -12,8 +12,8 @@ the domain and the modules at its seams.
   sessions too. Contract: the mode-policy table wires `CreateCamp` and `FoundCity`; a wired mode
   runs the advisor's pipeline with vanilla's full settlement evaluation skipped, writing only
   into its own evaluation, and any other mode is left entirely to vanilla with an INACTIVE
-  publish. Every activation releases the tail a previous mode's session left on the shared
-  evaluation (see Tail).
+  publish. Every activation releases the whole region a previous mode's session reserved on the
+  shared evaluation (see Tail).
 - **Takeover point**: `SettlementPlacementCursorSnapshot.EvaluatePlacement`, the snapshot sync
   that stamps the placement mode on the evaluation and asks vanilla's full settlement
   evaluation. For a wired mode the advisor answers there: it stamps the mode, reserves the
@@ -50,15 +50,18 @@ the domain and the modules at its seams.
   and no vanilla surface takes the advice's place. It is the only thing the advisor does on a
   zero-pick result. On a placement mode it does not own, the mode keeps its vanilla surface,
   pin gate included.
-- **Tail**: the fixed slot window in `CampPlacementEvaluation.ValidTiles` owned by the
-  evaluation writer. The base slot is the cursor slot, reserved at the activation baseline the
-  takeover runs vanilla's `Initialize` at; slots above it hold picks, rewritten in place at
-  invariant indices every refresh. Vanilla keeps running the refresh, and its hover append lands
-  above the reserved window; the writer keeps every slot inside the window outside the current
-  admission set scrubbed to -1, and never moves a vanilla entry. Because vanilla binds pins to
-  array indices, stable slots keep every retained pick bound; only the cursor tile's element
-  changes within one pick set. Vanilla scores the array's whole length, not the valid count, so a
-  tail left by a mode switch must be scrubbed, not just counted down.
+- **Tail**: the slot window in `CampPlacementEvaluation.ValidTiles` owned by the evaluation
+  writer. The base slot is the cursor slot, reserved at the activation baseline the takeover runs
+  vanilla's `Initialize` at; slots above it hold picks, rewritten in place at invariant indices
+  every refresh. Its size comes from config at the activation - the worst-case admission set for
+  the configured `RangeLevels` and quotas, tie headroom included - and it grows on demand when a
+  bigger set is published, so the window is never a cap on admission. Vanilla keeps running the
+  refresh, and its hover append lands above the reserved window; the writer keeps every slot inside
+  the window outside the current admission set scrubbed to -1, zeroing the slots each refresh
+  releases, and never moves a vanilla entry or sweeps the array. Because vanilla binds pins to array
+  indices, stable slots keep every retained pick bound; only the cursor tile's element changes
+  within one pick set. Vanilla scores the array's whole length, not the valid count, so a tail left
+  by a mode switch must be scrubbed over the whole region ever reserved, not just counted down.
 - **Placement neighborhood**: the set of territories the advisor scans: the hovered
   territory (level 1) plus `RangeLevels` hops over all adjacency edges, covering every
   tile of every territory in it. Sea, cliff, mountain and closed edges each count as a
@@ -129,15 +132,17 @@ the domain and the modules at its seams.
   startup probe checks every member by name.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the evaluation of the mode the session
   is running, and only into that evaluation: the mutating entry points guard on `SettleType`, so a
-  mode the mode-policy table has not wired writes nothing. One fixed window per evaluation instance -
-  the cursor snapshot's and the range overlay's are live at once - reserved at its activation baseline
+  mode the mode-policy table has not wired writes nothing. One window per evaluation instance - the
+  cursor snapshot's and the range overlay's are live at once - reserved at its activation baseline
   (vanilla's `Initialize`, the tail-reservation point, shared by every placement mode): TailStart is
-  the cursor slot, and the slots above it are the pick slots, rewritten in place. Each activation
-  releases the window the previous session left, in every mode. Each refresh writes the cursor slot
-  from the advisor's gate call with no mask - the failure flags and the three instant costs with it -
-  the pick entries `Showable` so the glyph set equals the shown set, leaves vanilla's own glyph flags
-  alone, zeroes every slot the refresh released and every slot above the count, then barriers and
-  raises `ValidTileCount` and points `CurrentPositionIndex` at the cursor slot.
+  the cursor slot, and the slots above it are the pick slots, rewritten in place. Its size is derived
+  from config at the activation - the worst-case admission set for the configured hops and quotas -
+  and it grows on demand. Each activation releases every slot the previous session reserved, in
+  every mode. Each refresh writes the cursor slot from the advisor's gate call with no mask - the
+  failure flags and the three instant costs with it - the pick entries `Showable` so the glyph set
+  equals the shown set, leaves vanilla's own glyph flags alone, zeroes the slots the refresh
+  released, then barriers and raises `ValidTileCount` and points `CurrentPositionIndex` at the
+  cursor slot.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
   lazy snapshot subscription. Animates entering and leaving tiles only.
