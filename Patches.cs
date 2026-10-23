@@ -1,5 +1,7 @@
 using System;
 using System.Reflection;
+using Amplitude.Mercury; // WorldPosition (the cursor position the scan pass reads)
+using Amplitude.Mercury.Data.Simulation; // ArmyActionType
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation;
 using HarmonyLib;
@@ -7,8 +9,92 @@ using HarmonyLib;
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// Simulation thread: after vanilla's current-position update, run the advisor and publish
-    /// its pick set. Failures only deactivate that set; they never write the evaluation.
+    /// Simulation thread, snapshot sync: the takeover point. The advisor's own pipeline replaces
+    /// vanilla's full settlement evaluation (SimulationEvaluator.cs:2328), which this snapshot
+    /// never calls. Mode dispatch on the stamped SettleType: a mode the mode-policy table wires
+    /// runs the advisor's scan pass and vanilla's body is skipped; any other mode publishes
+    /// INACTIVE and leaves vanilla fully in charge, including vanilla's own error log for an
+    /// unmapped type (SettlementPlacementCursorSnapshot.cs:67-69).
+    /// </summary>
+    [HarmonyPatch]
+    internal static class PlacementScanPatch
+    {
+        private static MethodBase TargetMethod()
+        {
+            return AccessTools.Method("Amplitude.Mercury.Interop.SettlementPlacementCursorSnapshot:EvaluatePlacement");
+        }
+
+        private static bool Prefix(SettlementPlacementCursorSnapshot __instance, SimulationEntityGUID settlementGuid, CampPlacementEvaluation placementEvaluation)
+        {
+            var plugin = Plugin.Instance;
+            if (plugin == null) return true; // advisor not composed: vanilla untouched
+
+            if (!ModePolicy.IsWired(StampedMode(__instance, placementEvaluation)))
+            {
+                plugin.Advisor.Deactivate(); // INACTIVE: nothing written, vanilla decides this mode
+                return true;
+            }
+
+            try
+            {
+                plugin.Writer.ReserveBaseline(placementEvaluation);
+                plugin.Advisor.RunScanPass(placementEvaluation, CursorTileOf(__instance), settlementGuid);
+            }
+            catch (Exception e)
+            {
+                plugin.Advisor.Deactivate(); // failure path: INACTIVE, no writes, no vanilla fallback
+                GameApi.Fail("EvaluatePlacement takeover: " + e.Message);
+            }
+            return false; // vanilla's full camp evaluation is never called from this snapshot
+        }
+
+        /// <summary>
+        /// The stamped placement mode. Vanilla assigns SettleType from the snapshot's action type
+        /// inside the body the takeover replaces (SettlementPlacementCursorSnapshot.cs:43), so the
+        /// advisor stamps it here: the mode reaches the mode-policy dispatch, and the pin label
+        /// keeps a coherent SettleType/BuildTime pair (PlacementPin.cs:201). A missing member
+        /// fails closed to an unwired type, which leaves vanilla in charge.
+        /// </summary>
+        private static ArmyActionType StampedMode(SettlementPlacementCursorSnapshot snapshot, CampPlacementEvaluation evaluation)
+        {
+            var field = typeof(SettlementPlacementCursorSnapshot).GetField("actionType",
+                BindingFlags.NonPublic | BindingFlags.Instance); // plain reflection: the harnesses run no patcher
+            if (field == null)
+            {
+                GameApi.Fail("snapshot member actionType");
+                return ArmyActionType.AttackArmy; // unwired: fail closed
+            }
+            var mode = (ArmyActionType)field.GetValue(snapshot);
+            evaluation.SettleType = mode;
+            return mode;
+        }
+
+        /// <summary>
+        /// The cursor tile the scan pass centers on: the position the snapshot is synchronizing
+        /// (ConstructiblePlacementCursorSnapshot.nextConstructiblePosition, read under the
+        /// snapshot mutex at :80). -1 when the member is gone or the position is invalid.
+        /// </summary>
+        private static int CursorTileOf(SettlementPlacementCursorSnapshot snapshot)
+        {
+            for (var type = snapshot.GetType(); type != null; type = type.BaseType)
+            {
+                var field = type.GetField("nextConstructiblePosition",
+                    BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                if (field == null) continue;
+                if (!(field.GetValue(snapshot) is WorldPosition)) return -1;
+                var position = (WorldPosition)field.GetValue(snapshot);
+                return position.IsWorldPositionValid() ? position.ToTileIndex() : -1;
+            }
+            GameApi.Fail("snapshot member nextConstructiblePosition");
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Simulation thread, per cursor refresh: the advisor's own pipeline decides this refresh -
+    /// vanilla's body is skipped, so no pick is appended to the evaluation and the writer owns
+    /// the whole tail, keeping it scrubbed to -1 outside the current admission set. Failures
+    /// publish INACTIVE and never write the evaluation.
     /// </summary>
     [HarmonyPatch]
     internal static class SettlementEvaluationPatch
@@ -18,17 +104,21 @@ namespace SettlementPlacementAdvisor
             return AccessTools.Method("Amplitude.Mercury.Interop.CampPlacementEvaluation:UpdateCurrentPosition");
         }
 
-        private static void Postfix(CampPlacementEvaluation __instance, int currentPositionTileIndex, SimulationEntityGUID armyGUID)
+        private static bool Prefix(CampPlacementEvaluation result, int cursorTile,
+            CampPlacementEvaluation placementEvaluation, SimulationEntityGUID armyGuid)
         {
+            // The advisor's append point: vanilla's own append (CampPlacementEvaluation.cs:267)
+            // never runs, so nothing here may append - slot TailStart is the cursor slot.
             try
             {
-                Plugin.Instance.Advisor.Run(__instance, currentPositionTileIndex, armyGUID);
+                Plugin.Instance.Advisor.Run(placementEvaluation, cursorTile, armyGuid);
             }
             catch (Exception e)
             {
                 Plugin.Instance.Advisor.Deactivate(); // failure path never writes the evaluation
-                GameApi.Fail("UpdateCurrentPosition postfix: " + e.Message);
+                GameApi.Fail("UpdateCurrentPosition prefix: " + e.Message);
             }
+            return false;
         }
     }
 
@@ -74,10 +164,11 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Presentation thread: FIMS-pin gate. Show pins on advisor picks and suppress vanilla
-    /// top-2 pins outside the set. An inactive set (null, or Tiles == null) keeps vanilla's
-    /// answer, so city placement and inactive refreshes are untouched. Membership is answered
-    /// from the captured snapshot, so pins do not flip per mouse move.
+    /// Presentation thread: FIMS-pin gate. Pins follow the published pick set: members on,
+    /// everything else off, answered from the captured set so pins do not flip per mouse move.
+    /// An inactive set (null, or Tiles == null) hands the gate back to vanilla. Vanilla's generic
+    /// pin filters (tile index, exploration, zero yields, on-screen culling) stay unoverridden.
+    /// The best-camp placement array is never read: it retires with vanilla's best-of-2 loop.
     /// </summary>
     [HarmonyPatch]
     internal static class SettlementPinsPatch
@@ -90,15 +181,8 @@ namespace SettlementPlacementAdvisor
         private static void Postfix(ref bool __result, DistrictPlacementEvaluation.ValidTile info)
         {
             var set = PickSet.Current;
-            if (set == null || set.Tiles == null) return;             // advisor inactive: vanilla gate
-            if (set.Contains(info.TileIndex)) { __result = true; return; }
-
-            var snapshot = Snapshots.SettlementPlacementCursorSnapshot;
-            if (snapshot == null || !snapshot.HasBeenRefreshedSinceStarted) return;
-            var best = snapshot.PresentationData.PlacementEvaluation.BestCampPlacementTileIndexes;
-            if (best == null) return;
-            for (int i = 0; i < best.Length; i++)
-                if (best[i] == info.TileIndex) { __result = false; break; }
+            if (set == null || set.Tiles == null) return; // advisor inactive: vanilla gate
+            __result = set.Contains(info.TileIndex);
         }
     }
 }
