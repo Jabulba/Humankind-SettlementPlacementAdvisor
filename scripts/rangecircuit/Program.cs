@@ -465,8 +465,8 @@ internal static class Program
 
 
     /// <summary>SPEC section 2 step 3: the placement neighborhood is the hovered territory
-    /// (level 1) plus RangeLevels hops over EVERY adjacency edge, every tile of every territory
-    /// in it, each territory publishing its own admission set. No reachability, no cap,
+    /// (level 1) plus RangeLevels - 1 expansions over EVERY adjacency edge: every tile of every
+    /// territory reached, each territory publishing its own admission set. No reachability, no cap,
     /// no budget, no truncation.</summary>
     private static void Neighborhood()
     {
@@ -588,13 +588,14 @@ internal static class Program
         Check("the hovered-territory adjacency failure is logged on the surface",
             logged.Contains("adjacency") && logged.Contains("territory 0"));
 
-        // A territory whose edges are unknown stops the expansion there; everything already
-        // reached keeps publishing its admission set.
+        // SPEC section 2 step 3: an unknown edge set anywhere in the pass degrades the WHOLE pass
+        // to the hovered territory's admission set - the territory the scan reached before the
+        // failure publishes nothing.
         var blocked = Chain();
         blocked.UnknownAdjacency[2] = true;
         var reached = null as Pick[];
         var blockedLog = Capture(() => { reached = ScanOn(new PickComputation(blocked), blocked, 0, 2, 1, 5); });
-        Expect("an unknown edge set stops the hops at that territory", reached, 100, 102, 110, 111, 121);
+        Expect("an unknown edge set at level 2 degrades the pass to the hovered territory", reached, 100, 102);
         Check("the mid-neighborhood adjacency failure is logged on the surface",
             blockedLog.Contains("adjacency") && blockedLog.Contains("territory 2"));
 
