@@ -30,9 +30,8 @@ the domain and the modules at its seams.
   per-refresh takeover for the cursor slot and the publish. In a mode the advisor has taken over it
   owns the refresh: vanilla's whole hover body, its append-one-tile rule and resize-by-10
   included, is skipped, and the cursor slot's gate result and cost trio come from the advisor's
-  gate call with no mask. A
-  mode it has not wired, and a surface that cannot answer, leave vanilla running its own refresh -
-  its own cursor entry included - with the advisor publishing INACTIVE.
+  gate call with no mask. A mode it has not wired, and a surface that cannot answer, leave vanilla
+  running its own refresh - its own cursor entry included - with the advisor publishing INACTIVE.
 - **Hovered territory**: the territory owning the tile under the placement cursor. Level 1 of the
   placement neighborhood.
 - **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
