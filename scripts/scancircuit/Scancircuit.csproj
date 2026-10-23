@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- SCAN-COST HARNESS: drives the real PickComputation placement-neighborhood scan over
+       synthetic territory graphs and reports per-refresh cost (cold pass, cache-hit refresh,
+       claim-triggered recompute) against the SPEC section 9 wide-scan bound. Not part of the
+       mod build; Plugin.cs is replaced by PluginShim.cs. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Scancircuit</AssemblyName>
+    <RootNamespace>Scancircuit</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0436;CS0618;MSB3277;CS0649</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="PluginShim.cs" />
+    <Compile Include="..\..\PickComputation.cs" />
+    <Compile Include="..\..\GameSurface.cs" />
+    <Compile Include="..\..\GameApi.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Game + BepInEx assemblies from the private GameLibs feed: the harness runs headless
+         against them, so runtime assets are included. Same pin as the mod and the other harnesses. -->
+    <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" />
+  </ItemGroup>
+
+</Project>

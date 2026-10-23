@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- NO-OP CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet and both
-       Harmony postfixes over a synthetic surface and snapshot. Asserts the advisor writes
-       nothing on a non-settlement evaluation, keeps its settlement tail, and hands the pin
-       gate back to vanilla when inactive. Not part of the mod build; Plugin.cs is replaced by
-       PluginShim.cs. -->
+  <!-- WRITE-SIDE / SHOWN-SET CONTRACT HARNESS: drives the real Advisor, EvaluationWriter, PickSet,
+       both Harmony postfixes and vanilla's own pin filter chain over a synthetic surface and
+       snapshot. Asserts the advisor writes through the active mode's pipeline into that mode's
+       evaluation only, scrubs the tail an activation inherits in every mode, publishes its
+       membership as the shown set, displays nothing when INACTIVE, and writes nothing in a mode
+       the mode-policy table has not wired. Not part of the mod build; Plugin.cs is PluginShim.cs. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -22,6 +23,7 @@
     <Compile Include="..\..\Advisor.cs" />
     <Compile Include="..\..\AdvisorConfig.cs" />
     <Compile Include="..\..\EvaluationWriter.cs" />
+    <Compile Include="..\..\LoadGate.cs" />
     <Compile Include="..\..\GameApi.cs" />
     <Compile Include="..\..\GameSurface.cs" />
     <Compile Include="..\..\Patches.cs" />

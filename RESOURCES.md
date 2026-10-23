@@ -7,7 +7,7 @@
 - [Harmony 2 documentation (pardeike)](https://harmony.pardeike.net/)
   Canonical Harmony docs: PatchAll, patch types, injection parameters (`__instance`, `__result`). Use for: patch mechanics.
 - [Harmony: Class AccessTools](https://harmony.pardeike.net/api/HarmonyLib.AccessTools.html)
-  Reflection helpers the mod uses to reach private game members. Use for: GameApi work.
+  Harmony's own reflection helpers: patch targets and injection parameters. Use for: patch work.
 - [HUMANKIND Official Modding Guide (PDF)](https://medias.games2gether.com/universes/humankind/mods/HUMANKIND_Official_Modding_Guide.pdf)
   Publisher/developer modding guide: mod types, tooling, what the game supports officially. Use for: game-specific mod context.
 - Local: plan doc in git history (`git show e89ce24:docs/plans/2026-10-21-camp-placement-advisor.md`,

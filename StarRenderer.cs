@@ -52,11 +52,12 @@ namespace SettlementPlacementAdvisor
     }
 
     /// <summary>
-    /// Draws the published pick set on the pick canvas, driven by the cursor snapshot's
-    /// presentation event. Entering tiles start fx, leaving tiles stop fx, retained tiles keep
-    /// their fx. Membership is answered from the captured snapshot, so a mid-pass publish
-    /// cannot tear the reconcile. Vanilla glyphs are suppressed by the writer; the cursor ghost
-    /// stays vanilla.
+    /// Draws the published picks on the pick canvas, on the cursor snapshot's presentation event
+    /// as the cadence signal: what is drawn is the presentation channel, never the event's own
+    /// data. Entering tiles start fx, leaving tiles stop fx, retained tiles keep their fx.
+    /// Membership is answered from the captured snapshot, so a mid-pass publish
+    /// cannot tear the reconcile. Stars are the shown set's first rendering; the cursor ghost
+    /// and vanilla's own glyphs stay vanilla's.
     /// </summary>
     internal sealed class StarRenderer
     {
@@ -172,7 +173,7 @@ namespace SettlementPlacementAdvisor
 
         private void OnPresentationDataChanged()
         {
-            Render(PickSet.Current); // capture the published set exactly once per pass
+            Render(PresentationView.Current.Picks); // capture the published picks exactly once per pass
         }
     }
 }

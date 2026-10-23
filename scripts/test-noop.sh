@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# No-op contract harness: asserts the advisor writes nothing on a non-settlement placement
-# evaluation, keeps its settlement tail behaviour, and hands the FIMS pin gate back to vanilla.
+# Write-side contract harness: asserts the advisor writes through the active mode's pipeline into
+# that mode's evaluation only, scrubs the tail an activation inherits, keeps the slot, barrier and
+# zero-fill invariants, and renders the published pick set as the shown set.
 # Non-zero exit = a contract violation.
 set -euo pipefail
 
