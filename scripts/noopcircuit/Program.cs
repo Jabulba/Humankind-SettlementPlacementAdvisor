@@ -182,6 +182,53 @@ internal static class Program
         if (!ok) s_Failures++;
     }
 
+    // Ticket 21 (SPEC section 8). The three help strings are copied verbatim from SPEC section 8
+    // and the capacities come from the hand-computed derivation above: expected values come from
+    // the spec, never from the code under test.
+    private const string SpecHelpTopHovered = "Admission quota on the hovered territory: this many tiles minimum, plus every tile tied with the last admitted score.";
+    private const string SpecHelpTopNeighbour = "Admission quota on every other territory in the placement neighborhood: this many tiles minimum, plus every tile tied with the last admitted score.";
+    private const string SpecHelpRangeLevels = "Placement-neighborhood hops from the hovered territory, the hovered territory counts as level 1: 3 = hovered + adjacent + adjacent-to-adjacent. Every adjacency edge counts as a hop: sea, cliff, mountain and closed-border edges included.";
+
+    /// <summary>The release cfg shape: production AdvisorConfig.Bind against a fresh config file,
+    /// saved the way the game and scripts/cfggen save it.</summary>
+    private static string GeneratedCfg()
+    {
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "noopcircuit-configsurface.cfg");
+        var file = new BepInEx.Configuration.ConfigFile(path, false,
+            new BepInEx.BepInPlugin(AdvisorConfig.PluginGuid, AdvisorConfig.PluginName, "0.0.0-harness"));
+        file.SaveOnConfigSet = false;
+        AdvisorConfig.Bind(file);
+        file.Save();
+        return System.IO.File.ReadAllText(path);
+    }
+
+    /// <summary>Every config key the saved file carries: the knob list of the shipped surface.</summary>
+    private static List<string> CfgKeys(string cfg)
+    {
+        var keys = new List<string>();
+        foreach (var raw in cfg.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("[")) continue;
+            var eq = line.IndexOf('=');
+            if (eq > 0) keys.Add(line.Substring(0, eq).Trim());
+        }
+        return keys;
+    }
+
+    /// <summary>The entry block a key owns in the saved file: help line, type, default and value.</summary>
+    private static string CfgEntry(string cfg, string key)
+    {
+        var lines = cfg.Split('\n');
+        var block = new StringBuilder();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].Trim().StartsWith(key + " =")) continue;
+            for (int j = System.Math.Max(0, i - 4); j <= i; j++) block.AppendLine(lines[j].Trim());
+        }
+        return block.ToString();
+    }
+
     private static string DescribeSet()
     {
         var set = PickSet.Current;
@@ -1357,6 +1404,94 @@ internal static class Program
         Plugin.CfgTopHovered.Value = 2;
         Plugin.CfgTopNeighbour.Value = 1;
         Plugin.CfgRangeLevels.Value = 2;
+
+        // J. Config surface and load failure (ticket 21, SPEC section 8): exactly three knobs with
+        // the spec's help strings, a hard loud load failure, and a startup summary that names the
+        // resolved members and the derived tail capacity.
+        var cfg = GeneratedCfg();
+        var cfgKeys = CfgKeys(cfg);
+        Check("the shipped config surface is exactly TopHovered, TopNeighbour and RangeLevels",
+            cfgKeys.Count == 3 && cfgKeys.Contains("TopHovered") && cfgKeys.Contains("TopNeighbour")
+            && cfgKeys.Contains("RangeLevels"));
+        Check("no enable toggle, score floor, tie cap, auto-disable knob or land-adjacency wording survives",
+            !cfgKeys.Contains("Enabled") && !cfgKeys.Contains("MinScore") && !cfgKeys.Contains("ScoreFloor")
+            && !cfgKeys.Contains("TieCap") && !cfgKeys.Contains("MaxStars") && !cfgKeys.Contains("AutoDisable")
+            && cfg.IndexOf("adjacent land") < 0 && cfg.IndexOf("land-adjacent") < 0 && cfg.IndexOf("land adjacency") < 0);
+        Check("TopHovered: default 2 with the spec's exact help string",
+            CfgEntry(cfg, "TopHovered").Contains(SpecHelpTopHovered)
+            && CfgEntry(cfg, "TopHovered").Contains("# Default value: 2")
+            && CfgEntry(cfg, "TopHovered").Contains("TopHovered = 2"));
+        Check("TopNeighbour: default 1 with the spec's exact help string",
+            CfgEntry(cfg, "TopNeighbour").Contains(SpecHelpTopNeighbour)
+            && CfgEntry(cfg, "TopNeighbour").Contains("# Default value: 1")
+            && CfgEntry(cfg, "TopNeighbour").Contains("TopNeighbour = 1"));
+        Check("RangeLevels: default 2 with the spec's exact help string",
+            CfgEntry(cfg, "RangeLevels").Contains(SpecHelpRangeLevels)
+            && CfgEntry(cfg, "RangeLevels").Contains("# Default value: 2")
+            && CfgEntry(cfg, "RangeLevels").Contains("RangeLevels = 2"));
+        var floorContext = CursorContext.For(1, "army", 0, 0, -3, 0, ArmyActionType.CreateCamp);
+        Check("every knob clamps below 1 to 1: the quotas and the hop count are mandatory",
+            floorContext.TopHovered == 1 && floorContext.TopNeighbour == 1 && floorContext.RangeLevels == 1);
+        var unboundedContext = CursorContext.For(1, "army", 0, 2, 1, 100000, ArmyActionType.CreateCamp);
+        Check("the hop count has no upper bound: a 100000-hop config reaches the scan unclamped",
+            unboundedContext.RangeLevels == 100000);
+
+        var shippedLine = LoadGate.ReadyLine(GameApi.RequiredNames, AdvisorConfig.TailCapacityFor(2, 1, 2));
+        var namedMembers = true;
+        for (int i = 0; i < GameApi.RequiredNames.Length; i++)
+            namedMembers &= shippedLine.Contains(GameApi.RequiredNames[i]);
+        Check("startup names every resolved member and the derived tail capacity for the shipped defaults",
+            namedMembers && shippedLine.Contains("90"));
+        Check("the startup tail capacity follows the config: quotas 2/1 with 3 hops is 170",
+            LoadGate.ReadyLine(GameApi.RequiredNames, AdvisorConfig.TailCapacityFor(2, 1, 3)).Contains("170"));
+
+        // The load gate on an unresolved surface: log the failure list, then close the game, and
+        // never hand control back to the advisor wiring. The termination mechanism is injected, so
+        // the harness drives the same decision the composition root takes in the game.
+        var gateEvents = new List<string>();
+        var gateLog = new List<string>();
+        var gateReturned = false;
+        var gateThrown = "";
+        var durablePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "noopcircuit-load-failure.log");
+        var durableAtClose = false;
+        System.IO.File.Delete(durablePath);
+        GameApi.ReadyStatic = false;
+        GameApi.ResolveError = "SimulationEvaluator.RenamedMember; ArmyActionHelper.FillCreateCampFailures(tile)";
+        try
+        {
+            LoadGate.EnforceResolvedSurface(
+                message =>
+                {
+                    gateEvents.Add("log");
+                    gateLog.Add(message);
+                    LoadGate.AppendFailureLine(durablePath, message);
+                },
+                () =>
+                {
+                    gateEvents.Add("close");
+                    durableAtClose = System.IO.File.ReadAllText(durablePath)
+                        .Contains("SimulationEvaluator.RenamedMember");
+                });
+            gateReturned = true;
+        }
+        catch (Exception e) { gateThrown = e.Message; }
+        Check("unresolved members log the failure list before the game is closed",
+            gateEvents.Count == 2 && gateEvents[0] == "log" && gateEvents[1] == "close");
+        Check("the logged failure names every unresolved member",
+            gateLog.Count == 1 && gateLog[0].Contains("SimulationEvaluator.RenamedMember")
+            && gateLog[0].Contains("ArmyActionHelper.FillCreateCampFailures(tile)"));
+        Check("the failure list is durable in the mod's own log file by the time the game closes",
+            durableAtClose);
+        Check("load failure is not a disable: control never returns to the advisor wiring",
+            !gateReturned && gateThrown.Contains("SimulationEvaluator.RenamedMember"));
+
+        var readyEvents = new List<string>();
+        var readyLog = new List<string>();
+        GameApi.ReadyStatic = true;
+        GameApi.ResolveError = string.Empty;
+        LoadGate.EnforceResolvedSurface(message => readyLog.Add(message), () => readyEvents.Add("close"));
+        Check("a resolved surface loads: nothing logged, the game stays open",
+            readyEvents.Count == 0 && readyLog.Count == 0);
 
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
         return s_Failures == 0 ? 0 : 1;

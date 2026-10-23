@@ -94,7 +94,8 @@ BepInEx/config/com.jabulba.settlementplacementadvisor.cfg
 
 `RangeLevels = 2` means the hovered territory plus the territories adjacent to it. `RangeLevels = 3`
 adds the territories adjacent to those. Every adjacency edge counts as a hop: sea, cliff, mountain
-and closed-border edges included. Values below 1 are clamped to 1.
+and closed-border edges included. All three settings are integers with a minimum of 1: values below 1
+are clamped to 1, and `RangeLevels` has no upper bound.
 
 The tile under the mouse ghost is the advisor's own cursor slot: the mod writes it on every refresh
 of a mode it has taken over, so the game's own hover highlight rule is skipped there, and a mode the
@@ -148,9 +149,10 @@ wired writes nothing at all.
 
 - Built against HUMANKIND game assemblies `1.0.31.4851` (GameLibs `1.0.31.4851-r2`).
 - Requires BepInEx 5 on the Mono/Unity player.
-- A game update can rename the internal members the mod reflects over. When that happens the
-  advisor disables itself and logs `Disabled, unresolved game members` instead of crashing.
-  A new mod build against the updated game assemblies is then required.
+- A game update can rename the internal members the mod reflects over. When that happens the mod
+  refuses to load: the failure list is logged and the game closes. The line lands in `LogOutput.log`,
+  in the prefix's `Player.log`, and in `BepInEx/SettlementPlacementAdvisor-load-failure.log`. A new
+  mod build against the updated game assemblies is then required.
 
 ## Troubleshooting
 
@@ -167,11 +169,12 @@ Search for `SettlementPlacementAdvisor`.
 | No stars at all | Is the plugin loaded? Is the placement mode a row the mode-policy table wires? |
 | A territory has no stars | Tiles must be explored and non-water, and the mode's territory filter must admit the territory |
 | No recommendations anywhere on this hover | Nothing displays when the neighborhood has nothing to advise: no stars, no pins, and no vanilla recommendations taking their place |
-| `Disabled, unresolved game members` | The game build changed; report the log and game version in an issue |
+| `Load failure, unresolved game members` | The game build renamed a member the mod reflects over: the game closes at startup, and the failure line names the members |
 | Nothing appears until the cursor moves | The mod wires star rendering on the first settlement placement refresh |
 
 Under Proton, early `Awake`-path exceptions appear in the prefix's `Player.log` rather than
-`LogOutput.log`.
+`LogOutput.log`. A load failure is written to all three: `LogOutput.log`, the prefix's `Player.log`,
+and `BepInEx/SettlementPlacementAdvisor-load-failure.log`.
 
 ## Building from source
 

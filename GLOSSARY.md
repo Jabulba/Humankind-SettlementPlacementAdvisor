@@ -148,6 +148,11 @@ the domain and the modules at its seams.
   lazy snapshot subscription. Animates entering and leaving tiles only.
 - **Pick canvas** (`PickCanvas`): the presentation-side effect interface the star renderer
   drives (start fx on a tile, stop fx). The Unity feedback controller adapter satisfies it.
+- **Load gate** (`LoadGate`): the composition root's load decision. A resolved game surface loads and
+  the startup line names the resolved members and the derived tail capacity. An unresolved one is a
+  hard, loud load failure: the failure list is logged in full, the durable copy is written, and the
+  game process is closed before any advisor wiring runs, so a partial binding never advises. There is
+  no auto-disable and no degraded mode; the failure line is what a player reports.
 
 ## Thread contract
 
