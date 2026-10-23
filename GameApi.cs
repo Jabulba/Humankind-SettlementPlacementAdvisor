@@ -2,20 +2,23 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Amplitude; // FixedPoint lives in namespace Amplitude (assembly Amplitude.Framework.dll).
+using Amplitude.Mercury.Data.Simulation; // ArmyActionType, DistrictDefinition
 using Amplitude.Mercury.Interop;
 using Amplitude.Mercury.Simulation; // SimulationEntityGUID
 using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency (the snapshot's territory edges)
 using AiSnapshots = Amplitude.Mercury.Interop.AI.Snapshots; // public AI snapshot: territory graph
-using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition; // edge transition flags
+using SnapshotTerritory = Amplitude.Mercury.Interop.AI.Entities.Territory; // snapshot territory entity
 using HarmonyLib;
 
 namespace SettlementPlacementAdvisor
 {
     /// <summary>
-    /// GameSurface implemented by reflection. Resolve() only verifies that members exist:
+    /// GameSurface implemented by reflection. Resolve() binds every name in RequiredNames:
     /// Sandbox statics are assigned at sandbox initialization, so values are read lazily. Any
-    /// missing member disables the advisor and is logged verbatim. Territory facts use the
-    /// public AI snapshot directly.
+    /// unresolved name leaves the surface not-ready with the full failure list, never a partial
+    /// binding. Territory facts, the snapshot territory graph and the district definitions use
+    /// the public layers directly; the gates, the terrain rule, the explored predicate and the
+    /// scoring primitive are simulation internals and reach the game through reflection.
     /// </summary>
     internal sealed class GameApi : GameSurface
     {
@@ -24,19 +27,98 @@ namespace SettlementPlacementAdvisor
         public static bool ReadyStatic;
         public static string ResolveError = string.Empty;
 
-        private static FieldInfo s_EvaluatorField;
-        private static FieldInfo s_RepositoryField;
-        private static FieldInfo s_WorldField;
-        private static FieldInfo s_VisibilityField;
-        private static FieldInfo s_SettlementDefinitionField;
-        private static FieldInfo s_PonderationField;
-        private static MethodInfo s_EvaluateOne;
-        private static MethodInfo s_TryGetArmy;
-        private static MethodInfo s_CheckTerrainAndPoi;
-        private static MethodInfo s_IsExploredFor;
+        // Member labels: the failure-list identity, the binding table key, and the adapter key.
+        private const string SandboxEvaluator = "Sandbox.SimulationEvaluator";
+        private const string SandboxRepository = "Sandbox.SimulationEntityRepository";
+        private const string SandboxWorld = "Sandbox.World";
+        private const string SandboxVisibility = "Sandbox.VisibilityController";
+        private const string SandboxEmpires = "Sandbox.Empires";
+        private const string RepositoryLookup = "SimulationEntityRepository.TryGetSimulationEntity";
+        private const string EvaluateOne = "SimulationEvaluator.EvaluateOneSettlementPlacement";
+        private const string Ponderation = "SimulationEvaluator.settlementScorePonderation";
+        private const string TerrainAndPoi = "ConstructibleHelper.CheckTerrainAndPOI";
+        private const string CampDefinition = "DepartmentOfTheInterior.CampDefinition";
+        private const string CityCenterDefinition = "DepartmentOfTheInterior.CityCenterDefinition";
+        private const string Explored = "VisibilityController.IsWorldPositionExplored";
+        private const string WorldTerritoryInfo = "World.TerritoryInfo";
+        private const string TerritoryInfoEdge = "TerritoryInfo.IsEdgeOfTheWorld";
+        private const string TerritoryInfoClaimed = "TerritoryInfo.Claimed";
+        private const string TerritoryInfoSettlement = "TerritoryInfo.SettlementGUID";
+        private const string TerritoryInfoEmpire = "TerritoryInfo.EmpireIndex";
+        private const string SnapshotTerritoryInfo = "WorldSnapshot.TerritoryInfo";
+        private const string SnapshotAdjacencies = "Territory.Adjacencies";
+        private const string SnapshotTileIndexes = "Territory.TileIndexes";
+        private const string CampTileGate = "ArmyActionHelper.FillCreateCampFailures(tile)";
+        private const string CampArmyGate = "ArmyActionHelper.FillCreateCampFailures(army)";
+        private const string FoundCityArmyGate = "ArmyActionHelper.FillFoundCityFailures(army)";
+        private const string FoundCityTileGate = "ArmyActionHelper.FillFoundCityFailures(position)";
+        private const string SettlerArmyGate = "ArmyActionHelper.FillSettlerAbilityFailures(army)";
+        private const string SettlerTileGate = "ArmyActionHelper.FillSettlerAbilityFailures(tile)";
+        private const string TileToPosition = "WorldPosition.GetHexagonOffsetFromTileIndex";
+        private const string ArmyType = "Simulation.Army";
+
+        private const string ArmyTypeName = "Amplitude.Mercury.Simulation.Army";
+
+        /// <summary>
+        /// One game member the surface binds by name. Shape null is a field binding, "type"
+        /// checks the declaring type alone, "name" binds an overload-free method, and every
+        /// other value selects the overload to match (Shape). The army lookup needs the open
+        /// generic instantiated for Army, so it carries its own shape.
+        /// </summary>
+        private struct NameBinding
+        {
+            public string Label;
+            public string TypeName;
+            public string Member;
+            public string Shape;
+        }
+
+        private static readonly NameBinding[] s_Bindings = new NameBinding[]
+        {
+            new NameBinding { Label = ArmyType, TypeName = ArmyTypeName, Member = null, Shape = "type" },
+            new NameBinding { Label = SandboxEvaluator, TypeName = "Amplitude.Mercury.Sandbox.Sandbox", Member = "SimulationEvaluator", Shape = null },
+            new NameBinding { Label = SandboxRepository, TypeName = "Amplitude.Mercury.Sandbox.Sandbox", Member = "SimulationEntityRepository", Shape = null },
+            new NameBinding { Label = SandboxWorld, TypeName = "Amplitude.Mercury.Sandbox.Sandbox", Member = "World", Shape = null },
+            new NameBinding { Label = SandboxVisibility, TypeName = "Amplitude.Mercury.Sandbox.Sandbox", Member = "VisibilityController", Shape = null },
+            new NameBinding { Label = SandboxEmpires, TypeName = "Amplitude.Mercury.Sandbox.Sandbox", Member = "Empires", Shape = null },
+            new NameBinding { Label = RepositoryLookup, TypeName = "Amplitude.Mercury.Simulation.SimulationEntityRepository", Member = "TryGetSimulationEntity", Shape = "genericArmy" },
+            new NameBinding { Label = EvaluateOne, TypeName = "Amplitude.Mercury.Simulation.SimulationEvaluator", Member = "EvaluateOneSettlementPlacement", Shape = "name" },
+            new NameBinding { Label = Ponderation, TypeName = "Amplitude.Mercury.Simulation.SimulationEvaluator", Member = "settlementScorePonderation", Shape = null },
+            new NameBinding { Label = TerrainAndPoi, TypeName = "Amplitude.Mercury.Simulation.ConstructibleHelper", Member = "CheckTerrainAndPOI", Shape = "terrainAndPoi" },
+            new NameBinding { Label = CampDefinition, TypeName = "Amplitude.Mercury.Simulation.DepartmentOfTheInterior", Member = "CampDefinition", Shape = null },
+            new NameBinding { Label = CityCenterDefinition, TypeName = "Amplitude.Mercury.Simulation.DepartmentOfTheInterior", Member = "CityCenterDefinition", Shape = null },
+            new NameBinding { Label = Explored, TypeName = "Amplitude.Mercury.Simulation.VisibilityController", Member = "IsWorldPositionExplored", Shape = "exploredBits" },
+            new NameBinding { Label = WorldTerritoryInfo, TypeName = "Amplitude.Mercury.Simulation.World", Member = "TerritoryInfo", Shape = null },
+            new NameBinding { Label = TerritoryInfoEdge, TypeName = "Amplitude.Mercury.Interop.TerritoryInfo", Member = "IsEdgeOfTheWorld", Shape = null },
+            new NameBinding { Label = TerritoryInfoClaimed, TypeName = "Amplitude.Mercury.Interop.TerritoryInfo", Member = "Claimed", Shape = null },
+            new NameBinding { Label = TerritoryInfoSettlement, TypeName = "Amplitude.Mercury.Interop.TerritoryInfo", Member = "SettlementGUID", Shape = null },
+            new NameBinding { Label = TerritoryInfoEmpire, TypeName = "Amplitude.Mercury.Interop.TerritoryInfo", Member = "EmpireIndex", Shape = null },
+            new NameBinding { Label = SnapshotTerritoryInfo, TypeName = "Amplitude.Mercury.Interop.AI.WorldSnapshot", Member = "TerritoryInfo", Shape = null },
+            new NameBinding { Label = SnapshotAdjacencies, TypeName = "Amplitude.Mercury.Interop.AI.Entities.Territory", Member = "Adjacencies", Shape = null },
+            new NameBinding { Label = SnapshotTileIndexes, TypeName = "Amplitude.Mercury.Interop.AI.Entities.Territory", Member = "TileIndexes", Shape = null },
+            new NameBinding { Label = CampTileGate, TypeName = "Amplitude.Mercury.Simulation.ArmyActionHelper", Member = "FillCreateCampFailures", Shape = "campTile" },
+            new NameBinding { Label = CampArmyGate, TypeName = "Amplitude.Mercury.Simulation.ArmyActionHelper", Member = "FillCreateCampFailures", Shape = "campArmy" },
+            new NameBinding { Label = FoundCityArmyGate, TypeName = "Amplitude.Mercury.Simulation.ArmyActionHelper", Member = "FillFoundCityFailures", Shape = "armyFlags" },
+            new NameBinding { Label = FoundCityTileGate, TypeName = "Amplitude.Mercury.Simulation.ArmyActionHelper", Member = "FillFoundCityFailures", Shape = "positionFlags" },
+            new NameBinding { Label = SettlerArmyGate, TypeName = "Amplitude.Mercury.Simulation.ArmyActionHelper", Member = "FillSettlerAbilityFailures", Shape = "armyFlags" },
+            new NameBinding { Label = SettlerTileGate, TypeName = "Amplitude.Mercury.Simulation.ArmyActionHelper", Member = "FillSettlerAbilityFailures", Shape = "tileFlags" },
+            new NameBinding { Label = TileToPosition, TypeName = "Amplitude.Mercury.WorldPosition", Member = "GetHexagonOffsetFromTileIndex", Shape = "tileToPosition" },
+        };
+
+        /// <summary>
+        /// Every game member name Resolve() checks, in binding order. It is derived from the
+        /// binding table, so a surface member whose game name is missing from the table is
+        /// reported by the harness: an unbound name can never be a silent partial binding.
+        /// </summary>
+        public static readonly string[] RequiredNames = Labels();
 
         private static readonly HashSet<string> s_LogOnce = new HashSet<string>();
         private static readonly int[] s_NoTiles = new int[0];
+        private static readonly SnapshotTerritory.Adjacency[] s_NoAdjacencies = new SnapshotTerritory.Adjacency[0];
+
+        private static Dictionary<string, FieldInfo> s_Fields = new Dictionary<string, FieldInfo>();
+        private static Dictionary<string, MethodInfo> s_Methods = new Dictionary<string, MethodInfo>();
+        private static MethodInfo s_ArmyLookup; // TryGetSimulationEntity instantiated for Army
 
         public bool Ready => ReadyStatic;
 
@@ -45,87 +127,76 @@ namespace SettlementPlacementAdvisor
             var failures = new List<string>();
             try
             {
-                var sandboxType = AccessTools.TypeByName("Amplitude.Mercury.Sandbox.Sandbox");
-                if (sandboxType == null)
-                {
-                    failures.Add("Sandbox type");
-                }
-                else
-                {
-                    s_EvaluatorField = AccessTools.Field(sandboxType, "SimulationEvaluator");
-                    if (s_EvaluatorField == null) failures.Add("Sandbox.SimulationEvaluator");
-                    s_RepositoryField = AccessTools.Field(sandboxType, "SimulationEntityRepository");
-                    if (s_RepositoryField == null) failures.Add("Sandbox.SimulationEntityRepository");
-                    s_WorldField = AccessTools.Field(sandboxType, "World");
-                    if (s_WorldField == null) failures.Add("Sandbox.World");
-                    s_VisibilityField = AccessTools.Field(sandboxType, "VisibilityController");
-                    if (s_VisibilityField == null) failures.Add("Sandbox.VisibilityController");
-                }
+                var fields = new Dictionary<string, FieldInfo>();
+                var methods = new Dictionary<string, MethodInfo>();
+                var armyType = AccessTools.TypeByName(ArmyTypeName);
 
-                var evaluatorType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.SimulationEvaluator");
-                if (evaluatorType == null) failures.Add("SimulationEvaluator type");
-                else
+                foreach (var binding in s_Bindings)
                 {
-                    s_EvaluateOne = AccessTools.Method(evaluatorType, "EvaluateOneSettlementPlacement");
-                    if (s_EvaluateOne == null) failures.Add("SimulationEvaluator.EvaluateOneSettlementPlacement");
-                    s_PonderationField = AccessTools.Field(evaluatorType, "settlementScorePonderation");
-                    if (s_PonderationField == null) failures.Add("SimulationEvaluator.settlementScorePonderation");
-                }
-
-                var repositoryType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.SimulationEntityRepository");
-                var armyType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.Army");
-                if (repositoryType == null) failures.Add("SimulationEntityRepository type");
-                else if (armyType == null) failures.Add("Simulation.Army");
-                else
-                {
-                    MethodInfo candidate = null;
-                    foreach (var m in repositoryType.GetMethods())
+                    var owner = AccessTools.TypeByName(binding.TypeName);
+                    if (owner == null)
                     {
-                        if (!m.IsGenericMethodDefinition || m.Name != "TryGetSimulationEntity") continue;
-                        var ps = m.GetParameters();
-                        if (ps.Length == 2 && ps[0].ParameterType == typeof(SimulationEntityGUID) && ps[1].ParameterType.IsByRef)
-                        {
-                            candidate = m;
-                            break;
-                        }
+                        failures.Add(binding.Label);
+                        continue;
                     }
-                    if (candidate == null) failures.Add("SimulationEntityRepository.TryGetSimulationEntity");
-                    else s_TryGetArmy = candidate.MakeGenericMethod(armyType);
+
+                    if (binding.Shape == "type") continue; // the type itself is the fact to check
+
+                    if (binding.Shape == null)
+                    {
+                        var field = AccessTools.Field(owner, binding.Member);
+                        if (field == null) failures.Add(binding.Label);
+                        else fields[binding.Label] = field;
+                        continue;
+                    }
+
+                    if (binding.Shape == "genericArmy")
+                    {
+                        var open = armyType == null ? null : FindOpenGeneric(owner, binding.Member);
+                        if (open == null) failures.Add(binding.Label);
+                        else
+                        {
+                            s_ArmyLookup = open.MakeGenericMethod(armyType);
+                            methods[binding.Label] = s_ArmyLookup;
+                        }
+                        continue;
+                    }
+
+                    var method = FindMethod(owner, binding.Member, Shape(binding.Shape, armyType));
+                    if (method == null) failures.Add(binding.Label);
+                    else methods[binding.Label] = method;
                 }
 
-                var departmentType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.DepartmentOfTheInterior");
-                s_SettlementDefinitionField = departmentType == null ? null : AccessTools.Field(departmentType, "CampDefinition");
-                if (s_SettlementDefinitionField == null) failures.Add("DepartmentOfTheInterior.CampDefinition");
-
-                var helperType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.ConstructibleHelper");
-                var districtDefinitionType = AccessTools.TypeByName("Amplitude.Mercury.Data.Simulation.DistrictDefinition");
-                s_CheckTerrainAndPoi = helperType == null || districtDefinitionType == null
-                    ? null
-                    : AccessTools.Method(helperType, "CheckTerrainAndPOI", new[] { districtDefinitionType, typeof(int) }, null);
-                if (s_CheckTerrainAndPoi == null) failures.Add("ConstructibleHelper.CheckTerrainAndPOI");
-
-                var visibilityType = AccessTools.TypeByName("Amplitude.Mercury.Simulation.VisibilityController");
-                s_IsExploredFor = visibilityType == null
-                    ? null
-                    : AccessTools.Method(visibilityType, "IsWorldPositionExploredFor", new[] { typeof(int), typeof(int) }, null);
-                if (s_IsExploredFor == null) failures.Add("VisibilityController.IsWorldPositionExploredFor");
+                ReadyStatic = failures.Count == 0;
+                ResolveError = string.Join("; ", failures);
+                s_Fields = fields;
+                s_Methods = methods;
             }
             catch (Exception e)
             {
-                failures.Add("exception: " + e.Message);
+                ReadyStatic = false;
+                ResolveError = "exception: " + e.Message;
             }
-
-            ReadyStatic = failures.Count == 0;
-            ResolveError = string.Join("; ", failures);
         }
 
-        public bool IsSettlementSiteTile(int tileIndex)
+        /// <summary>
+        /// The membership mask (SPEC section 2 step 6): the two affordability failures are
+        /// dropped so an unaffordable tile stays in the recommendation set. Every other flag
+        /// of both flag parts is untouched.
+        /// </summary>
+        internal static ArmyActionFailureFlags ApplyMoneyInfluenceMask(ArmyActionFailureFlags failures)
         {
+            failures.Remove(ArmyActionFailureFlags_Part1.NotEnoughMoney);
+            failures.Remove(ArmyActionFailureFlags_Part1.NotEnoughInfluence);
+            return failures;
+        }
+
+        public bool IsSettlementSiteTile(object districtDefinition, int tileIndex)
+        {
+            if (districtDefinition == null) return false;
             try
             {
-                var settlementDefinition = s_SettlementDefinitionField.GetValue(null);
-                if (settlementDefinition == null) return false;
-                return (bool)s_CheckTerrainAndPoi.Invoke(null, new object[] { settlementDefinition, tileIndex });
+                return (bool)Method(TerrainAndPoi).Invoke(null, new object[] { districtDefinition, tileIndex });
             }
             catch (Exception e)
             {
@@ -150,42 +221,74 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        public object TryGetArmy(SimulationEntityGUID guid)
+        /// <summary>
+        /// Fail-open on reflection issues. Exploration is monotonic, so a cached pick is only
+        /// invalidated by VisibilityFrame when new scouting occurs during a settlement session.
+        /// Non-major empires are fog-unlimited in the gate (ArmyActionHelper.cs:475), so a
+        /// missing vision-bits read reports explored.
+        /// </summary>
+        public bool IsTileExplored(int tileIndex, int empireIndex)
         {
+            if (empireIndex < 0) return true;
             try
             {
-                var repository = s_RepositoryField.GetValue(null);
-                if (repository == null) return null;
-                var args = new object[] { guid, null };
-                var ok = (bool)s_TryGetArmy.Invoke(repository, args);
-                return ok ? args[1] : null;
+                var visibilityController = Field(SandboxVisibility).GetValue(null);
+                if (visibilityController == null) return true;
+                var bits = GetEmpireVisionBits(empireIndex);
+                if (bits == 0) return true;
+                return (bool)Method(Explored).Invoke(visibilityController, new object[] { tileIndex, bits });
             }
             catch (Exception e)
             {
-                Fail("TryGetSimulationEntity: " + e.Message);
-                return null;
+                Fail("IsWorldPositionExplored: " + e.Message);
+                return true;
             }
         }
 
-        public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
+        public int GetArmyEmpireIndex(object army)
+        {
+            return army == null ? -1 : GetIntMember(army, "EmpireIndex");
+        }
+
+        public bool TryGetDistrictDefinition(ArmyActionType mode, out object districtDefinition)
+        {
+            districtDefinition = null;
+            try
+            {
+                if (mode == ArmyActionType.CreateCamp) districtDefinition = Field(CampDefinition).GetValue(null);
+                else if (mode == ArmyActionType.FoundCity || mode == ArmyActionType.FoundCityWithSettler) districtDefinition = Field(CityCenterDefinition).GetValue(null);
+                else return false; // unmapped mode: fail closed
+                return districtDefinition != null;
+            }
+            catch (Exception e)
+            {
+                Fail("district definition: " + e.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The settler's starting pack is passed as null: the vanilla evaluator never reads it,
+        /// so it never reaches the score (vanilla-eval-flow research, section 4).
+        /// </summary>
+        public bool EvaluateTile(object army, int tileIndex, object districtDefinition, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
         {
             validTile = default(DistrictPlacementEvaluation.ValidTile);
             score = FixedPoint.Zero;
-            if (army == null) return false;
+            if (army == null || districtDefinition == null) return false;
             try
             {
-                var evaluator = s_EvaluatorField.GetValue(null);
-                var settlementDefinition = s_SettlementDefinitionField.GetValue(null);
-                if (evaluator == null || settlementDefinition == null) return false;
+                var evaluator = Field(SandboxEvaluator).GetValue(null);
+                if (evaluator == null) return false;
 
                 var vt = default(DistrictPlacementEvaluation.ValidTile);
                 vt.Initialize(tileIndex);
-                var args = new object[] { army, vt, tileIndex, settlementDefinition, null };
-                s_EvaluateOne.Invoke(evaluator, args);
+                var args = new object[] { army, vt, tileIndex, districtDefinition, null };
+                Method(EvaluateOne).Invoke(evaluator, args);
                 vt = (DistrictPlacementEvaluation.ValidTile)args[1];
 
                 var fims = vt.OverallFims;
-                var ponderation = (FimsInfo)s_PonderationField.GetValue(evaluator);
+                var ponderation = (FimsInfo)Field(Ponderation).GetValue(evaluator);
                 fims.Multiply(ref ponderation);
 
                 validTile = vt;
@@ -199,38 +302,13 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        /// <summary>
-        /// Fail-open on reflection issues. Exploration is monotonic, so a cached pick is only
-        /// invalidated by VisibilityFrame when new scouting occurs during a settlement session.
-        /// </summary>
-        public bool IsTileExplored(int tileIndex, int empireIndex)
-        {
-            if (empireIndex < 0) return true;
-            try
-            {
-                var visibilityController = s_VisibilityField.GetValue(null);
-                if (visibilityController == null) return true;
-                return (bool)s_IsExploredFor.Invoke(visibilityController, new object[] { tileIndex, empireIndex });
-            }
-            catch (Exception e)
-            {
-                Fail("IsWorldPositionExploredFor: " + e.Message);
-                return true;
-            }
-        }
-
-        public int GetArmyEmpireIndex(object army)
-        {
-            return army == null ? -1 : GetIntMember(army, "EmpireIndex");
-        }
-
         public bool GetCurrentFrames(out int districtFrame, out int constructionFrame, out int visibilityFrame)
         {
             districtFrame = constructionFrame = visibilityFrame = 0;
             try
             {
-                var world = s_WorldField.GetValue(null);
-                var visibilityController = s_VisibilityField.GetValue(null);
+                var world = Field(SandboxWorld).GetValue(null);
+                var visibilityController = Field(SandboxVisibility).GetValue(null);
                 if (world == null || visibilityController == null) return false;
 
                 var districtInfo = GetMemberValue(world, "DistrictInfo");
@@ -246,6 +324,44 @@ namespace SettlementPlacementAdvisor
             {
                 Fail("frame counters: " + e.Message);
                 return false;
+            }
+        }
+
+        public bool GetTerritoryFrame(out int territoryFrame)
+        {
+            territoryFrame = 0;
+            try
+            {
+                var world = Field(SandboxWorld).GetValue(null);
+                if (world == null) return false;
+                var territoryInfo = Field(WorldTerritoryInfo).GetValue(world);
+                if (territoryInfo == null) return false;
+                var frame = GetMemberValue(territoryInfo, "Frame");
+                if (!(frame is int)) return false;
+                territoryFrame = (int)frame;
+                return true;
+            }
+            catch (Exception e)
+            {
+                Fail("claim/exploration frame: " + e.Message);
+                return false;
+            }
+        }
+
+        public object TryGetArmy(SimulationEntityGUID guid)
+        {
+            try
+            {
+                var repository = Field(SandboxRepository).GetValue(null);
+                if (repository == null) return null;
+                var args = new object[] { guid, null };
+                var ok = (bool)s_ArmyLookup.Invoke(repository, args);
+                return ok ? args[1] : null;
+            }
+            catch (Exception e)
+            {
+                Fail("TryGetSimulationEntity: " + e.Message);
+                return null;
             }
         }
 
@@ -265,62 +381,129 @@ namespace SettlementPlacementAdvisor
             }
         }
 
-        public bool GetTerritoryFacts(int territoryIndex, out bool isClaimed, out int[] tiles)
+        public TerritoryFactsResult GetTerritoryFacts(int territoryIndex, out TerritoryFacts facts)
         {
-            isClaimed = true;
-            tiles = s_NoTiles;
+            facts = default(TerritoryFacts);
+            facts.Tiles = s_NoTiles;
             try
             {
                 var world = AiSnapshots.World;
+                var infos = world == null ? null : world.TerritoryInfo;
                 var territories = world == null ? null : world.Territories;
-                if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length) return false;
-                var territory = territories[territoryIndex];
-                isClaimed = territory.Info.Claimed;
-                var siteTiles = territory.TileIndexes;
-                if (siteTiles != null) tiles = siteTiles;
-                return true;
+                if (infos == null || territories == null
+                    || territoryIndex < 0 || territoryIndex >= infos.Length || territoryIndex >= territories.Length)
+                    return TerritoryFactsResult.Unknown;
+
+                var info = infos[territoryIndex];
+                facts.IsEdgeOfTheWorld = info.IsEdgeOfTheWorld;
+                facts.Claimed = info.Claimed;
+                facts.HasSettlement = info.SettlementGUID != 0UL;
+                facts.OwnerEmpireIndex = info.EmpireIndex == byte.MaxValue ? -1 : (int)info.EmpireIndex;
+                var siteTiles = territories[territoryIndex].TileIndexes;
+                if (siteTiles != null) facts.Tiles = siteTiles;
+                return TerritoryFactsResult.Known;
             }
             catch (Exception e)
             {
                 Fail("territory facts: " + e.Message);
-                return false;
+                return TerritoryFactsResult.Unknown;
             }
         }
 
-        public int[] LandAdjacentTerritories(int territoryIndex)
+        public SnapshotTerritory.Adjacency[] AdjacentTerritories(int territoryIndex)
         {
             try
             {
                 var world = AiSnapshots.World;
                 var territories = world == null ? null : world.Territories;
-                if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length) return s_NoTiles;
-                return LandAdjacentIndexes(territories[territoryIndex].Adjacencies);
+                if (territories == null || territoryIndex < 0 || territoryIndex >= territories.Length) return s_NoAdjacencies;
+                var edges = territories[territoryIndex].Adjacencies;
+                return edges == null ? s_NoAdjacencies : edges;
             }
             catch (Exception e)
             {
                 Fail("territory adjacencies: " + e.Message);
-                return s_NoTiles;
+                return s_NoAdjacencies;
             }
         }
 
-        /// <summary>
-        /// Keeps only Open-transition edges, in snapshot order. Data in/indexes out so the
-        /// range harness can drive the production filter directly.
-        /// </summary>
-        internal static int[] LandAdjacentIndexes(Territory.Adjacency[] adjacencies)
+        public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence, out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
         {
-            if (adjacencies == null) return s_NoTiles;
-            var indexes = new int[adjacencies.Length];
-            int count = 0;
-            for (int i = 0; i < adjacencies.Length; i++)
+            failures = ArmyActionFailureFlags.None;
+            moneyCost = FixedPoint.Zero;
+            influenceCost = FixedPoint.Zero;
+            unitCost = FixedPoint.Zero;
+            if (army == null) return false;
+
+            try
             {
-                if ((adjacencies[i].Transition & TerritoryTransition.Open) == TerritoryTransition.None) continue;
-                indexes[count++] = adjacencies[i].TerritoryIndex;
+                if (mode == ArmyActionType.CreateCamp)
+                {
+                    var args = new object[] { army, tileIndex, failures, moneyCost, influenceCost, unitCost };
+                    Method(CampTileGate).Invoke(null, args);
+                    failures = (ArmyActionFailureFlags)args[2];
+                    moneyCost = (FixedPoint)args[3];
+                    influenceCost = (FixedPoint)args[4];
+                    unitCost = (FixedPoint)args[5];
+                }
+                else if (mode == ArmyActionType.FoundCity)
+                {
+                    var args = new object[] { army, PositionForTile(tileIndex), failures };
+                    Method(FoundCityTileGate).Invoke(null, args);
+                    failures = (ArmyActionFailureFlags)args[2];
+                }
+                else if (mode == ArmyActionType.FoundCityWithSettler)
+                {
+                    var args = new object[] { army, tileIndex, failures };
+                    Method(SettlerTileGate).Invoke(null, args);
+                    failures = (ArmyActionFailureFlags)args[2];
+                }
+                else return false; // unmapped mode: fail closed
             }
-            if (count == indexes.Length) return indexes;
-            var trimmed = new int[count];
-            Array.Copy(indexes, trimmed, count);
-            return trimmed;
+            catch (Exception e)
+            {
+                Fail("tile gate " + mode + ": " + e.Message);
+                return false;
+            }
+
+            if (maskMoneyAndInfluence) failures = ApplyMoneyInfluenceMask(failures);
+            return true;
+        }
+
+        public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
+        {
+            failures = ArmyActionFailureFlags.None;
+            if (army == null) return false;
+
+            try
+            {
+                if (mode == ArmyActionType.CreateCamp)
+                {
+                    // computeMinimumCost: false: no cheapest-adjacent-claim cost math.
+                    var args = new object[] { army, failures, FixedPoint.Zero, FixedPoint.Zero, FixedPoint.Zero, false };
+                    Method(CampArmyGate).Invoke(null, args);
+                    failures = (ArmyActionFailureFlags)args[1];
+                }
+                else if (mode == ArmyActionType.FoundCity)
+                {
+                    var args = new object[] { army, failures };
+                    Method(FoundCityArmyGate).Invoke(null, args);
+                    failures = (ArmyActionFailureFlags)args[1];
+                }
+                else if (mode == ArmyActionType.FoundCityWithSettler)
+                {
+                    var args = new object[] { army, failures };
+                    Method(SettlerArmyGate).Invoke(null, args);
+                    failures = (ArmyActionFailureFlags)args[1];
+                }
+                else return false; // unmapped mode: fail closed
+            }
+            catch (Exception e)
+            {
+                Fail("army gate " + mode + ": " + e.Message);
+                return false;
+            }
+            return true;
         }
 
         /// <summary>Log each distinct advisor failure once.</summary>
@@ -331,6 +514,98 @@ namespace SettlementPlacementAdvisor
             {
                 if (s_LogOnce.Add(what)) Plugin.Instance.Log("advisor failure: " + what);
             }
+        }
+
+        private static string[] Labels()
+        {
+            var labels = new string[s_Bindings.Length];
+            for (int i = 0; i < s_Bindings.Length; i++) labels[i] = s_Bindings[i].Label;
+            return labels;
+        }
+
+        private static FieldInfo Field(string label)
+        {
+            FieldInfo field;
+            return s_Fields.TryGetValue(label, out field) ? field : null;
+        }
+
+        private static MethodInfo Method(string label)
+        {
+            MethodInfo method;
+            return s_Methods.TryGetValue(label, out method) ? method : null;
+        }
+
+        /// <summary>Parameter shapes of the reflected gates, in the game's own signatures.</summary>
+        private static Type[] Shape(string shape, Type armyType)
+        {
+            var flagsRef = typeof(ArmyActionFailureFlags).MakeByRefType();
+            var costRef = typeof(FixedPoint).MakeByRefType();
+            switch (shape)
+            {
+                case "name": return null;
+                case "campTile": return new[] { armyType, typeof(int), flagsRef, costRef, costRef, costRef };
+                case "campArmy": return new[] { armyType, flagsRef, costRef, costRef, costRef, typeof(bool) };
+                case "armyFlags": return new[] { armyType, flagsRef };
+                case "positionFlags": return new[] { armyType, typeof(Amplitude.Mercury.WorldPosition), flagsRef };
+                case "tileFlags": return new[] { armyType, typeof(int), flagsRef };
+                case "terrainAndPoi": return new[] { typeof(DistrictDefinition), typeof(int) };
+                case "exploredBits": return new[] { typeof(int), typeof(int) };
+                case "tileToPosition": return new[] { typeof(int) };
+                default: return null;
+            }
+        }
+
+        private static MethodInfo FindMethod(Type owner, string member, Type[] parameterTypes)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+            foreach (var method in owner.GetMethods(flags))
+            {
+                if (method.Name != member) continue;
+                if (parameterTypes == null) return method;
+                var parameters = method.GetParameters();
+                if (parameters.Length != parameterTypes.Length) continue;
+                bool match = true;
+                for (int i = 0; i < parameterTypes.Length; i++)
+                {
+                    if (parameters[i].ParameterType != parameterTypes[i]) { match = false; break; }
+                }
+                if (match) return method;
+            }
+            return null;
+        }
+
+        private static MethodInfo FindOpenGeneric(Type owner, string member)
+        {
+            foreach (var method in owner.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (!method.IsGenericMethodDefinition || method.Name != member) continue;
+                var parameters = method.GetParameters();
+                if (parameters.Length == 2 && parameters[0].ParameterType == typeof(SimulationEntityGUID) && parameters[1].ParameterType.IsByRef)
+                    return method;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The empire's shared vision bits, the second argument of the gate's explored
+        /// predicate. MajorEmpire only: non-major empires declare no Bits and the gate skips
+        /// their fog test, so 0 reports explored.
+        /// </summary>
+        private static int GetEmpireVisionBits(int empireIndex)
+        {
+            var empires = Field(SandboxEmpires).GetValue(null) as Array;
+            if (empires == null || empireIndex < 0 || empireIndex >= empires.Length) return 0;
+            var empire = empires.GetValue(empireIndex);
+            if (empire == null) return 0;
+            return GetIntMember(empire, "Bits");
+        }
+
+        /// <summary>WorldPosition for a tile index, as the FoundCity position gate takes it.</summary>
+        private static object PositionForTile(int tileIndex)
+        {
+            var toPosition = Method(TileToPosition);
+            var offset = toPosition.Invoke(null, new object[] { tileIndex });
+            return Activator.CreateInstance(toPosition.DeclaringType, offset);
         }
 
         private static int GetIntMember(object target, string name)

@@ -43,6 +43,7 @@ namespace SettlementPlacementAdvisor
                 return;
             }
 
+            Log("surface ready, " + GameApi.RequiredNames.Length + " game members resolved: " + string.Join(", ", GameApi.RequiredNames));
             Stars = new StarRenderer(new UnityPickCanvas());
             Writer = new EvaluationWriter();
             Advisor = new Advisor(GameApi.Shared, new PickComputation(GameApi.Shared), Writer, Stars);

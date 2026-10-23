@@ -1,11 +1,14 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using Amplitude;
 using Amplitude.Mercury.Data.Simulation; // ArmyActionType
 using Amplitude.Mercury.Interop;
+using Amplitude.Mercury.Interop.AI.Entities; // Territory.Adjacency
 using Amplitude.Mercury.Simulation;
 using SettlementPlacementAdvisor;
+using TerritoryTransition = Amplitude.Mercury.Data.AI.TerritoryTransition;
 
 /// <summary>
 /// Synthetic surface: four territories of three settlement-site tiles, scored by tile index, so a
@@ -20,11 +23,20 @@ internal sealed class GraphSurface : GameSurface
     public bool Ready { get { return ReadyFlag; } }
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
     public int GetArmyEmpireIndex(object army) { return 0; }
-    public bool IsSettlementSiteTile(int tileIndex) { return true; }
+
+    public bool TryGetDistrictDefinition(ArmyActionType mode, out object districtDefinition)
+    {
+        if (mode == ArmyActionType.CreateCamp) { districtDefinition = "camp"; return true; }
+        if (mode == ArmyActionType.FoundCity || mode == ArmyActionType.FoundCityWithSettler) { districtDefinition = "cityCenter"; return true; }
+        districtDefinition = null;
+        return false;
+    }
+
+    public bool IsSettlementSiteTile(object districtDefinition, int tileIndex) { return districtDefinition != null; }
     public bool IsTileWater(int tileIndex) { return AllWater; }
     public bool IsTileExplored(int tileIndex, int empireIndex) { return true; }
 
-    public bool EvaluateTile(object army, int tileIndex, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
+    public bool EvaluateTile(object army, int tileIndex, object districtDefinition, out DistrictPlacementEvaluation.ValidTile validTile, out FixedPoint score)
     {
         var vt = default(DistrictPlacementEvaluation.ValidTile);
         vt.Initialize(tileIndex);
@@ -41,22 +53,50 @@ internal sealed class GraphSurface : GameSurface
         return true;
     }
 
+    public bool GetTerritoryFrame(out int territoryFrame)
+    {
+        territoryFrame = 1;
+        return true;
+    }
+
     public int TerritoryOfTile(int tileIndex)
     {
         int t = (tileIndex - 100) / 10;
         return (t < 0 || t > 3) ? -1 : t;
     }
 
-    public bool GetTerritoryFacts(int territoryIndex, out bool isClaimed, out int[] tiles)
+    public TerritoryFactsResult GetTerritoryFacts(int territoryIndex, out TerritoryFacts facts)
     {
-        isClaimed = false;
-        tiles = new int[] { 100 + territoryIndex * 10 + 1, 100 + territoryIndex * 10 + 2, 100 + territoryIndex * 10 + 3 };
-        return true;
+        facts = default(TerritoryFacts);
+        facts.IsEdgeOfTheWorld = false;
+        facts.Claimed = false;
+        facts.HasSettlement = false;
+        facts.OwnerEmpireIndex = -1;
+        facts.Tiles = new int[] { 100 + territoryIndex * 10 + 1, 100 + territoryIndex * 10 + 2, 100 + territoryIndex * 10 + 3 };
+        return TerritoryFactsResult.Known;
     }
 
-    public int[] LandAdjacentTerritories(int territoryIndex)
+    public Territory.Adjacency[] AdjacentTerritories(int territoryIndex)
     {
-        return territoryIndex < 3 ? new int[] { territoryIndex + 1 } : new int[0];
+        var edges = new Territory.Adjacency[territoryIndex < 3 ? 1 : 0];
+        for (int i = 0; i < edges.Length; i++)
+            edges[i] = new Territory.Adjacency { TerritoryIndex = territoryIndex + 1, Transition = TerritoryTransition.Open };
+        return edges;
+    }
+
+    public bool TryGetTileGateFailures(ArmyActionType mode, object army, int tileIndex, bool maskMoneyAndInfluence, out ArmyActionFailureFlags failures, out FixedPoint moneyCost, out FixedPoint influenceCost, out FixedPoint unitCost)
+    {
+        failures = ArmyActionFailureFlags.None;
+        moneyCost = FixedPoint.Zero;
+        influenceCost = FixedPoint.Zero;
+        unitCost = FixedPoint.Zero;
+        return army != null;
+    }
+
+    public bool TryGetArmyGateFailures(ArmyActionType mode, object army, out ArmyActionFailureFlags failures)
+    {
+        failures = ArmyActionFailureFlags.None;
+        return army != null;
     }
 }
 
@@ -327,6 +367,43 @@ internal static class Program
         Check("city activation on the shared array leaves vanilla's slots alone",
             VanillaSlots(settlement, baseline) == vanillaSlots && Inactive());
 
+        // F. Game surface contract: the membership mask (SPEC section 2 step 6) and the startup
+        // name checks for every member the rewrite adds (no partial binding).
+        var moneyInfluenceTerrain = (ArmyActionFailureFlags)(ArmyActionFailureFlags_Part1.NotEnoughMoney
+            | ArmyActionFailureFlags_Part1.NotEnoughInfluence | ArmyActionFailureFlags_Part1.TerrainNotValid);
+        Check("mask drops money and influence, keeps the rest",
+            GameApi.ApplyMoneyInfluenceMask(moneyInfluenceTerrain) == (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.TerrainNotValid);
+        Check("mask turns an unaffordable tile into a clean one",
+            GameApi.ApplyMoneyInfluenceMask((ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughMoney) == ArmyActionFailureFlags.None);
+        var mixedParts = (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughInfluence
+            | (ArmyActionFailureFlags)ArmyActionFailureFlags_Part2.NoValidAdjacentTerritoryToClaim;
+        Check("mask never touches Part 2 flags",
+            GameApi.ApplyMoneyInfluenceMask(mixedParts) == (ArmyActionFailureFlags)ArmyActionFailureFlags_Part2.NoValidAdjacentTerritoryToClaim);
+        Check("mask on a clean gate result stays clean",
+            GameApi.ApplyMoneyInfluenceMask(ArmyActionFailureFlags.None) == ArmyActionFailureFlags.None);
+
+        var required = string.Join(" | ", GameApi.RequiredNames);
+        Check("startup checks the camp tile gate", required.Contains("ArmyActionHelper.FillCreateCampFailures(tile)"));
+        Check("startup checks the camp army gate", required.Contains("ArmyActionHelper.FillCreateCampFailures(army)"));
+        Check("startup checks the FoundCity tile gate", required.Contains("ArmyActionHelper.FillFoundCityFailures(position)"));
+        Check("startup checks the FoundCity army gate", required.Contains("ArmyActionHelper.FillFoundCityFailures(army)"));
+        Check("startup checks the settler tile gate", required.Contains("ArmyActionHelper.FillSettlerAbilityFailures(tile)"));
+        Check("startup checks the settler army gate", required.Contains("ArmyActionHelper.FillSettlerAbilityFailures(army)"));
+        Check("startup checks both district definitions",
+            required.Contains("DepartmentOfTheInterior.CampDefinition") && required.Contains("DepartmentOfTheInterior.CityCenterDefinition"));
+        Check("startup checks the explored any-bit predicate, and the all-bits one is gone",
+            required.Contains("VisibilityController.IsWorldPositionExplored") && !required.Contains("IsWorldPositionExploredFor"));
+        Check("startup checks the tile-to-position conversion the FoundCity gate needs",
+            required.Contains("WorldPosition.GetHexagonOffsetFromTileIndex"));
+        Check("startup checks the claim-frame source", required.Contains("World.TerritoryInfo"));
+        Check("startup checks the snapshot territory facts",
+            required.Contains("TerritoryInfo.IsEdgeOfTheWorld") && required.Contains("TerritoryInfo.Claimed")
+            && required.Contains("TerritoryInfo.SettlementGUID") && required.Contains("TerritoryInfo.EmpireIndex")
+            && required.Contains("WorldSnapshot.TerritoryInfo"));
+        Check("startup checks the adjacency and site-tile sources",
+            required.Contains("Territory.Adjacencies") && required.Contains("Territory.TileIndexes"));
+        Check("startup checks every surface member by exactly one name entry",
+            GameApi.RequiredNames.Distinct().Count() == GameApi.RequiredNames.Length);
         Console.WriteLine("[noopc] verdict: " + (s_Failures == 0 ? "GREEN" : "RED (" + s_Failures + " contract violations)"));
         return s_Failures == 0 ? 0 : 1;
     }
