@@ -96,8 +96,9 @@ BepInEx/config/com.jabulba.settlementplacementadvisor.cfg
 adds the territories adjacent to those. Every adjacency edge counts as a hop: sea, cliff, mountain
 and closed-border edges included. Values below 1 are clamped to 1.
 
-The tile under the mouse ghost remains part of the vanilla placement cursor, so it can add one
-visual highlight on top of the configured count.
+The tile under the mouse ghost is the advisor's own cursor slot: the mod writes it on every camp
+refresh, so the game's own hover highlight rule is skipped there, and a mode the mod has not taken
+over keeps the vanilla cursor and its hover highlight untouched.
 
 ## How it works
 
@@ -120,7 +121,11 @@ and vanilla's full camp evaluation is never called from that snapshot. It then:
    frame included, so a claim, unclaim, owner steal, exploration or patrol change recomputes the
    territory it changed.
 6. Writes the admitted tiles into a fixed tail of the placement evaluation, each entry shown,
-   then publishes an immutable pick set for the presentation side.
+   then publishes an immutable pick set for the presentation side. Each camp refresh also writes
+   the cursor slot - the hovered tile's own entry, with the camp action's failure flags and its
+   money, influence and unit costs - so the game's camp mouse marker and hovered-pin rule read
+   the advisor's facts. An unaffordable recommended tile looks exactly like an affordable one,
+   star and pin included: the cost failure appears only when the cursor is on it.
 7. Renders a star on every published tile and answers the FIMS pin gate from the same set: a
    member shows its pin when the game's own hovered-tile rule allows it, and nothing else shows
    a pin. The game's generic pin filters (unexplored tiles, zero-yield tiles, off-screen

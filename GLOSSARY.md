@@ -25,10 +25,14 @@ the domain and the modules at its seams.
 - **Scan pass**: the advisor's full evaluation of the placement neighborhood for a cursor
   position, run at the takeover point and cache-served per territory: a refresh re-serves cached
   territories and evaluates only what a moved frame changed.
-- **Refresh**: one pass of the placement snapshot sync. The advisor hooks both halves: the
-  takeover for the scan pass, and vanilla's `UpdateCurrentPosition` as a postfix for the
-  per-cursor publish. Vanilla keeps running the refresh, so the cursor slot keeps its gate
-  result and cost trio; the advisor publishes the admission set on top of it.
+- **Refresh**: one pass of the placement snapshot's per-cursor update. The advisor hooks both
+  halves: the `EvaluatePlacement` takeover for the scan pass, and `UpdateCurrentPosition` as the
+  per-refresh takeover for the cursor slot and the publish. In a mode the advisor has taken over it
+  owns the refresh: vanilla's whole hover body, its append-one-tile rule and resize-by-10
+  included, is skipped, and the cursor slot's gate result and cost trio come from the advisor's
+  gate call with no mask. A
+  mode it has not wired, and a surface that cannot answer, leave vanilla running its own refresh -
+  its own cursor entry included - with the advisor publishing INACTIVE.
 - **Hovered territory**: the territory owning the tile under the placement cursor. Level 1 of the
   placement neighborhood.
 - **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
@@ -88,9 +92,12 @@ the domain and the modules at its seams.
   pins unless it reports a failure other than `NotEnoughInfluence`), and vanilla's generic
   pin filters - tile index, exploration, zero gains and losses, on-screen culling - stay
   unoverridden, so a zero-yield or off-screen member shows its star and no pin.
-- **Cursor slot**: the advisor-owned `TailStart` entry of the tail, carrying the hovered
-  tile's gate result: the single surviving path to the ghost, the territory highlight,
-  and the settlement mouse marker.
+- **Cursor slot**: the advisor-owned `TailStart` entry of the tail, which the advisor writes
+  itself every refresh of a taken-over mode from the mode gate call with no mask: the hovered
+  tile's scored entry with no glyph, the failure flags, and the three instant costs, with
+  `CurrentPositionIndex` pointing at it. The single surviving path to the ghost, the territory
+  highlight, the settlement mouse marker and the hovered-pin rule; the no-entry shape scrubs it
+  and the index points at nothing.
 
 ## Modules
 
@@ -116,13 +123,16 @@ the domain and the modules at its seams.
   come from the same `ArmyActionHelper` calls the game's own placement actions use, per mode, and the
   startup probe checks every member by name.
 - **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
-  evaluation. Reserves the activation baseline at the takeover (vanilla's `Initialize`, the
-  tail-reservation point) and the tail window at activation; writes pick slots in place,
-  barriers, then raises `ValidTileCount`; writes every member's entry `Showable`, so the glyph
-  set equals the shown set, and leaves vanilla's own glyph flags alone; keeps every slot above
-  the cursor slot scrubbed when the advisor has no pick for it; owns `CurrentPositionIndex`
-  when the cursor tile is a pick. Settlement placement writes only: the mutating entry point
-  guards on `SettleType`, and city activation only releases the advisor's own slots.
+  evaluation. One fixed window per evaluation instance - the cursor snapshot's and the range
+  overlay's are live at once - reserved at its activation baseline (vanilla's `Initialize`, the
+  tail-reservation point): TailStart is the cursor slot, and the slots above it are the pick slots,
+  rewritten in place. Each refresh writes the cursor slot from the advisor's gate call with no
+  mask - the failure flags and the three instant costs with it - the pick entries `Showable` so
+  the glyph set equals the shown set, leaves vanilla's own glyph flags
+  alone, zeroes every slot the refresh released and every slot above the count, then barriers and
+  raises `ValidTileCount` and points `CurrentPositionIndex` at the cursor slot. Settlement placement
+  writes only: the mutating entry point guards on `SettleType`, and city activation only releases
+  the advisor's own slots.
 - **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
   point, takes a pick set; owns the rendered version, the fx handles per tile, and the
   lazy snapshot subscription. Animates entering and leaving tiles only.
@@ -137,5 +147,6 @@ the domain and the modules at its seams.
   capture the set once per pass and never query the live channel twice in one pass.
 - The evaluation array is shared by reference, not copied. The writer's publish order (write
   slots, barrier, raise count) keeps the ghost, the settle action and the pins coherent. The
-  only index it repoints is `CurrentPositionIndex`, when the cursor tile is a pick. The
+  only index it repoints is `CurrentPositionIndex`, on the refresh that writes the cursor slot:
+  at the cursor slot when the advisor answered the hovered tile, at nothing when it did not. The
   best-placement cascade is retired: the arrays stay unpopulated and no advisor code reads them.

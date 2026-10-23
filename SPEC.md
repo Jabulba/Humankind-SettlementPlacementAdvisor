@@ -19,9 +19,9 @@ candidate 2). The advisor replaces vanilla's full evaluation
 dispatched on the stamped `SettleType` through a mode-policy table (section 3). Unmapped
 types fail closed: no writes, INACTIVE publish, vanilla's error-log path.
 
-The existing `UpdateCurrentPosition` postfix (`Patches.cs:16-19`) stays as the per-refresh
-advisor entry, reduced to the cursor-slot write and publish of the admission set (section
-5); the scan pass runs at the `EvaluatePlacement` takeover.
+The existing `UpdateCurrentPosition` postfix (`Patches.cs:16-19`) becomes the per-refresh advisor
+takeover: in a wired mode it writes the cursor slot and publishes the admission set, and vanilla's
+refresh body is skipped (section 5); the scan pass runs at the `EvaluatePlacement` takeover.
 
 Disposition of the 16 takeover candidates (flow doc section 8):
 
@@ -30,7 +30,7 @@ Disposition of the 16 takeover candidates (flow doc section 8):
 | 1 | `SimulationEvaluator.EvaluateSettlementPlacement` (2328) | Replaced by the advisor pipeline; never called from the patched snapshot. |
 | 2 | `SettlementPlacementCursorSnapshot.EvaluatePlacement` (36) | Patch point: mode dispatch + scan pass (this section). |
 | 3 | `ConstructibleHelper.FillValidSettlePositions` (2478), incl. the 2-turn `FindReachable` flood fill (2480) | Not invoked: the placement-neighborhood scan replaces the candidate source. |
-| 4 | `CampPlacementEvaluation.UpdateCurrentPosition` (48) | Vanilla keeps running the refresh; its hover append rule (69-82, resize-by-10) dies. The advisor owns the cursor slot (section 5). |
+| 4 | `CampPlacementEvaluation.UpdateCurrentPosition` (48) | Refresh takeover (prefix): in a wired mode the advisor writes the cursor slot and publishes, and vanilla's hover append rule (69-82, resize-by-10) dies with its body; a mode not wired keeps vanilla's refresh, its own cursor entry included (section 5). |
 | 5 | `CampPlacementEvaluation.Initialize` (34) + `DistrictPlacementEvaluation.Initialize` (130) | Kept as the tail-reservation point in every mode (`Patches.cs:40-56`). |
 | 6 | `CampPlacementEvaluation.ReplaceBestCampPlacementAtIndex` (85) + best-of-2 loop (`SimulationEvaluator.cs:2389-2412`) | Deleted in all modes (the only `Showable` writer; unbounded tie sets need it gone). |
 | 7 | `SimulationEvaluator.EvaluateOneSettlementPlacement` (2419) | Kept as the scoring primitive, called through `GameApi`. |
@@ -205,9 +205,10 @@ stays the adapter seam to the game; harnesses cross the same seams as production
 
 - **`Patches.cs`**: add the `EvaluatePlacement` takeover patch (scan pass entry, mode
   dispatch); keep the `Initialize` postfix (tail reservation, all modes), the
-  `DeactivateCursor` postfix (INACTIVE on exit), and the `UpdateCurrentPosition` postfix
-  reduced to the per-refresh cursor slot + publish. Re-bind the pin-gate postfix to
-  membership + hovered rule; delete the best-placement suppression loop.
+  `DeactivateCursor` postfix (INACTIVE on exit), and the `UpdateCurrentPosition` takeover
+  (prefix): in a wired mode the advisor writes the cursor slot and publishes, and vanilla's
+  refresh body is skipped; a mode it has not wired returns vanilla's own refresh. Re-bind the
+  pin-gate postfix to membership + hovered rule; delete the best-placement suppression loop.
 - **`Advisor.cs`**: `CreateCamp` guard becomes mode-policy dispatch; army-level gate call
   added; INACTIVE publish semantics stay (unavailable facts, unmapped mode, mode exit,
   zero picks all publish INACTIVE).
