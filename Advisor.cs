@@ -55,7 +55,8 @@ namespace SettlementPlacementAdvisor
 
             var picks = m_Picks.Compute(CursorContext.For(hovered, army,
                 m_Game.GetArmyEmpireIndex(army),
-                Plugin.CfgTopHovered.Value, Plugin.CfgTopNeighbour.Value, Plugin.CfgRangeLevels.Value));
+                Plugin.CfgTopHovered.Value, Plugin.CfgTopNeighbour.Value, Plugin.CfgRangeLevels.Value,
+                evaluation.SettleType));
             if (picks == null)
             {
                 PublishEmpty(evaluation);
