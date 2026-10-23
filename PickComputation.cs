@@ -53,11 +53,13 @@ namespace SettlementPlacementAdvisor
     /// </summary>
     internal static class ModePolicy
     {
-        /// <summary>The wired rows of the table: settlement placement and city founding. The
-        /// settler row and anything unmapped fail closed.</summary>
+        /// <summary>The wired rows of the table: settlement placement, city founding, and settler
+        /// city founding. Anything unmapped fails closed.</summary>
         public static bool IsWired(ArmyActionType mode)
         {
-            return mode == ArmyActionType.CreateCamp || mode == ArmyActionType.FoundCity;
+            return mode == ArmyActionType.CreateCamp
+                || mode == ArmyActionType.FoundCity
+                || mode == ArmyActionType.FoundCityWithSettler;
         }
 
         /// <summary>
@@ -65,15 +67,24 @@ namespace SettlementPlacementAdvisor
         /// (ArmyActionHelper.cs:510-514) and drop (Claimed || SettlementGUID != 0) (515-518).
         /// FoundCity row: drop IsEdgeOfTheWorld (645-648) and drop SettlementGUID != 0 (649-652) -
         /// the city gate puts no Claimed term on it, so a territory claimed with no settlement on it
-        /// is claimable for a city. An unwired mode claims nothing.
+        /// is claimable for a city. Settler row (740-753, replaceability 763-771): drop
+        /// IsEdgeOfTheWorld and drop SettlementGUID != 0 EXCEPT the empire's own camp/pre-camp
+        /// settlement, which the settler replaces - the gate clears it (no TerritoryAlreadyClaimed,
+        /// no CannotSettleOnTerritoryWithCity) while the district-occupancy rule treats a camp or
+        /// pre-camp as replaceable. An own city, or any other empire's settlement, stays out. A
+        /// territory claimed with no settlement on it stays claimable (no Claimed term). An unwired
+        /// mode claims nothing.
         /// Never a filter: the territory ocean flag, AnyClaimableTile, DemilitarizedByEmpireIndex,
         /// close-border bits.
         /// </summary>
-        public static bool IsTerritoryClaimable(ArmyActionType mode, TerritoryFacts facts)
+        public static bool IsTerritoryClaimable(ArmyActionType mode, TerritoryFacts facts, int empireIndex)
         {
             if (facts.IsEdgeOfTheWorld) return false;
             if (mode == ArmyActionType.CreateCamp) return !facts.Claimed && !facts.HasSettlement;
             if (mode == ArmyActionType.FoundCity) return !facts.HasSettlement;
+            if (mode == ArmyActionType.FoundCityWithSettler)
+                return !facts.HasSettlement
+                    || (facts.OwnerEmpireIndex == empireIndex && !facts.IsOwnedByCity);
             return false; // no row in the table: fail closed
         }
     }
@@ -137,6 +148,7 @@ namespace SettlementPlacementAdvisor
             public bool IsEdgeOfTheWorld;
             public bool Claimed;
             public bool HasSettlement;
+            public bool IsOwnedByCity;
             public int OwnerEmpireIndex;
             public int TileCount;
         }
@@ -274,6 +286,7 @@ namespace SettlementPlacementAdvisor
                 && cached.IsEdgeOfTheWorld == facts.IsEdgeOfTheWorld
                 && cached.Claimed == facts.Claimed
                 && cached.HasSettlement == facts.HasSettlement
+                && cached.IsOwnedByCity == facts.IsOwnedByCity
                 && cached.OwnerEmpireIndex == facts.OwnerEmpireIndex
                 && cached.TileCount == facts.Tiles.Length;
         }
@@ -289,7 +302,7 @@ namespace SettlementPlacementAdvisor
             // Unknown is a distinct outcome: an unknown territory never advises, and its stamp
             // records the unknown read so a later known read recomputes it.
             bool known = m_Game.GetTerritoryFacts(territoryIndex, out facts) == TerritoryFactsResult.Known;
-            if (known && ModePolicy.IsTerritoryClaimable(pass.Context.Mode, facts))
+            if (known && ModePolicy.IsTerritoryClaimable(pass.Context.Mode, facts, pass.Context.EmpireIndex))
             {
                 var tiles = facts.Tiles;
                 for (int i = 0; i < tiles.Length; i++)
@@ -322,6 +335,7 @@ namespace SettlementPlacementAdvisor
                 IsEdgeOfTheWorld = facts.IsEdgeOfTheWorld,
                 Claimed = facts.Claimed,
                 HasSettlement = facts.HasSettlement,
+                IsOwnedByCity = facts.IsOwnedByCity,
                 OwnerEmpireIndex = facts.OwnerEmpireIndex,
                 TileCount = known ? facts.Tiles.Length : 0
             };

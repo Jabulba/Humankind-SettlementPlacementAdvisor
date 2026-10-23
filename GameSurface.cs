@@ -22,6 +22,11 @@ namespace SettlementPlacementAdvisor
         /// <summary>A settlement sits on it (TerritoryInfo.SettlementGUID != 0): settlement site.</summary>
         public bool HasSettlement;
 
+        /// <summary>The settlement on it is a city (TerritoryInfo.IsOwnedByCity): not a camp/pre-camp.
+        /// A settler replaces only the empire's own camp/pre-camp settlement (replaceability), so a
+        /// city site, camp status included, stays out of the settler territory filter.</summary>
+        public bool IsOwnedByCity;
+
         /// <summary>Owning empire (TerritoryInfo.EmpireIndex), -1 when unowned.</summary>
         public int OwnerEmpireIndex;
 
