@@ -21,6 +21,9 @@ internal sealed class GraphSurface : GameSurface
     public bool ReadyFlag = true;
     public bool AllOcean; // C3: report every territory as sea-flagged
     public bool AllWater; // C2: report every tile as water
+    public bool HasSettlement; // the hovered territory carries a settlement (settler filter)
+    public int SettlementOwner = -1; // owning empire of that settlement, -1 unowned
+    public bool SettlementIsCity; // that settlement is a city, not a camp/pre-camp (not replaceable)
 
     public bool Ready { get { return ReadyFlag; } }
     public object TryGetArmy(SimulationEntityGUID guid) { return "army"; }
@@ -86,8 +89,9 @@ internal sealed class GraphSurface : GameSurface
         facts = default(TerritoryFacts);
         facts.IsEdgeOfTheWorld = false;
         facts.Claimed = false;
-        facts.HasSettlement = false;
-        facts.OwnerEmpireIndex = -1;
+        facts.HasSettlement = HasSettlement;
+        facts.OwnerEmpireIndex = HasSettlement ? SettlementOwner : -1;
+        facts.IsOwnedByCity = SettlementIsCity;
         facts.Tiles = new int[] { 100 + territoryIndex * 10 + 1, 100 + territoryIndex * 10 + 2, 100 + territoryIndex * 10 + 3 };
         return TerritoryFactsResult.Known;
     }
@@ -474,19 +478,11 @@ internal static class Program
         Plugin.Instance = plugin;
         const int baseline = 6;
 
-        // A. The modes the mode-policy table has not wired stay vanilla's, in every entry point.
-        // FoundCityWithSettler shares this evaluation type and gets its row with its own ticket;
-        // the city no-op contract itself is retired (ticket 17): the advisor writes through the
-        // active mode's pipeline only, so an unwired mode is the one that writes nothing.
-        var settler = NewEvaluation(ArmyActionType.FoundCityWithSettler, baseline);
-        var settlerClean = Signature(settler);
-        plugin.Writer.NoteActivation(settler);
-        Refresh(settler, 5002);
-        var stray = new Pick { Tile = 7777, Score = 9, Data = settler.ValidTiles[0] };
-        plugin.Writer.Write(settler, new[] { stray }, CursorSlot.Unanswered);
-        plugin.Writer.ClearTail(settler);
-        Check("an unwired city mode: no tail claim, zero writes", Signature(settler) == settlerClean);
-        Check("an unwired city mode publishes nothing", Inactive());
+        // A. A mode the mode-policy table has not wired stays vanilla's in every entry point: it
+        // writes nothing and publishes nothing. The city no-op contract is retired (ticket 17): the
+        // advisor writes through the active mode's pipeline only, so an unwired mode is the one that
+        // writes nothing. All three settlement modes (camp, FoundCity, FoundCityWithSettler) are now
+        // wired rows, each driven as a wired control below (blocks B, D2 and D2b).
 
         var unwired = NewEvaluation(ArmyActionType.Ransack, baseline);
         var unwiredClean = Signature(unwired);
@@ -588,7 +584,7 @@ internal static class Program
 
         PickSet.Current = null;
         Gate("camp before any publish: no pin shows", true, bestTile, false);
-        SetPresentationMode(ArmyActionType.FoundCityWithSettler);
+        SetPresentationMode(ArmyActionType.Ransack); // a mode the table has not wired
         Gate("a mode the table has not wired keeps a vanilla pin answer on", true, bestTile, true);
         Gate("a mode the table has not wired keeps a vanilla pin answer off", false, pickTile, false);
         SetPresentationMode(ArmyActionType.CreateCamp);
@@ -786,6 +782,158 @@ internal static class Program
         Check("camp activation releases the city tail on the shared array",
             ReleasedTail(settlement, baseline));
 
+        // D2b. Settler city founding (ticket 18) is a wired row of the mode-policy table. The
+        // settler session publishes an admission set under the same admission and presentation
+        // contract as camp and city - quota plus top tie set, membership pin gate, INACTIVE
+        // displays nothing - writes only into its own evaluation, asks the settler gates
+        // (FillSettlerAbilityFailures), and reports the founding cost on the cursor slot from the
+        // unmasked gate call.
+        var settler = NewEvaluation(ArmyActionType.FoundCityWithSettler, baseline);
+        var settlerGlyphs = VanillaGlyphs(settler, baseline);
+        var campUntouched2 = Signature(settlement);
+        plugin.Writer.NoteActivation(settler);
+        Check("Settler activation reserves the tail window on its own evaluation",
+            settler.ValidTiles.Length >= baseline + 1 + EvaluationWriter.TailCapacity
+            && plugin.Writer.CursorSlotIndex(settler) == baseline);
+        Check("a settler activation claims no tail on a foreign evaluation",
+            Signature(settlement) == campUntouched2);
+
+        int settlerSlot = plugin.Writer.CursorSlotIndex(settler);
+        snapshot.PresentationData.PlacementEvaluation = settler;
+        SetPresentationMode(ArmyActionType.FoundCityWithSettler);
+        SetPresentationFailure(ArmyActionFailureFlags.None);
+        surface.HasSettlement = false; surface.SettlementOwner = -1; surface.SettlementIsCity = false;
+        surface.ScoreByTile[131] = 200;
+        surface.TileGateCalls = 0;
+        surface.TileGateModes = "";
+        surface.ArmyGateModes = "";
+        canvas.Started = 0;
+        canvas.Stopped = 0;
+        Check("the advisor owns the settler refresh: vanilla's whole hover body is skipped",
+            !Refresh(settler, 131));
+        var settlerTiles = PickSet.Current.Tiles;
+        Check("Settler refresh publishes ascending unique tiles", AscendingUnique(settlerTiles));
+        Check("Settler refresh writes every pick into its own tail slot",
+            settler.ValidTileCount > baseline + 1
+            && ScanTailHits(settler, settlerTiles, baseline + 1) == settlerTiles.Length);
+        Check("Settler refresh: Showable equals pick-set membership in the advisor's slots",
+            ShowableIsMembership(settler, baseline, settlerTiles));
+        Check("Settler refresh: vanilla's glyph flags are untouched",
+            VanillaGlyphs(settler, baseline) == settlerGlyphs);
+        Check("the settler session asks the settler gates only, the cursor slot unmasked",
+            surface.ArmyGateModes == "FoundCityWithSettler "
+            && ModeCalls(surface.TileGateModes, "FoundCityWithSettlerm") + ModeCalls(surface.TileGateModes, "FoundCityWithSettleru") == surface.TileGateCalls
+            && ModeCalls(surface.TileGateModes, "FoundCityWithSettlerm") > 0
+            && ModeCalls(surface.TileGateModes, "FoundCityWithSettleru") == 1);
+        Check("the settler cursor index points at the advisor's own slot, on the hovered tile",
+            settler.CurrentPositionIndex == settlerSlot && settler.ValidTiles[settlerSlot].TileIndex == 131
+            && !settler.ValidTiles[settlerSlot].Showable);
+        Check("the settler writes touch no other evaluation", Signature(settlement) == campUntouched2);
+        plugin.Stars.Render(PickSet.Current);
+        Check("the settler pick set starts one star per pick", canvas.Started == settlerTiles.Length);
+        Check("settler pins follow the published membership",
+            GateAnswer(settlerTiles[0]) && GateAnswer(settlerTiles[1]) && !GateAnswer(bestTile));
+        Check("every settler advisor slot above the live count is zeroed",
+            ZeroFilledAboveCount(settler, settler.ValidTileCount,
+                settlerSlot + 1 + EvaluationWriter.TailCapacity));
+        int settlerStars = settlerTiles.Length;
+
+        // The settler tile gate with the same money/influence mask (SPEC section 3): an
+        // unaffordable tile stays, every other failure drops the tile, and the cursor slot reports
+        // the founding failure and cost from the unmasked settler gate call on hover.
+        surface.TileGateFlags[131] = ArmyActionFailureFlags_Part1.NotEnoughMoney
+            | ArmyActionFailureFlags_Part1.NotEnoughInfluence;
+        surface.TileGateMoney[131] = (FixedPoint)40;
+        surface.TileGateInfluence[131] = (FixedPoint)25;
+        surface.DistrictFrame++;
+        Refresh(settler, 130); // the cursor sits off the pick
+        var settlerUnaffordable = PickSet.Current.Tiles;
+        Check("an unaffordable settler tile stays in the published set", ContainsTile(settlerUnaffordable, 131));
+        Check("the unaffordable settler pick keeps its star: no fx stopped, the same member set",
+            canvas.Stopped == 0 && settlerUnaffordable.Length == settlerStars);
+        Check("the unaffordable settler pick shows its pin", GateAnswer(131));
+        int settlerUnmaskedBefore = surface.UnmaskedGateCalls;
+        Refresh(settler, 131); // the cursor hovers the pick: the failure surfaces on the cursor slot
+        Check("the settler cursor slot comes from the unmasked settler gate call",
+            surface.UnmaskedGateCalls == settlerUnmaskedBefore + 1
+            && surface.TileGateModes.EndsWith("FoundCityWithSettleru "));
+        Check("hovering the unaffordable settler pick reports the founding failure on the cursor slot",
+            (settler.SettleFailure & (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughMoney) != 0
+            && (settler.SettleFailure & (ArmyActionFailureFlags)ArmyActionFailureFlags_Part1.NotEnoughInfluence) != 0
+            && settler.CurrentPositionIndex == settlerSlot
+            && settler.ValidTiles[settlerSlot].TileIndex == 131);
+        surface.TileGateFlags.Clear();
+        surface.TileGateMoney.Clear();
+        surface.TileGateInfluence.Clear();
+        surface.DistrictFrame++;
+        Refresh(settler, 131);
+        Check("the clean settler hover reports no founding failure and the pin is back",
+            settler.SettleFailure == ArmyActionFailureFlags.None
+            && settler.InstantMoneyCost == FixedPoint.Zero
+            && GateAnswer(131));
+
+        // The settler territory filter (740-753, replaceability 763-771): the empire's own
+        // camp/pre-camp settlement is admitted as replaceable; every other settlement site -
+        // another empire's, the empire's own city, and an unowned one - stays out, publishing
+        // INACTIVE. A settlement-free territory is admitted.
+        surface.HasSettlement = true; surface.SettlementOwner = 0; surface.SettlementIsCity = false;
+        surface.DistrictFrame++;
+        Refresh(settler, 131);
+        Check("the empire's own camp/pre-camp settlement is admitted (replaceable)",
+            !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+        surface.SettlementOwner = 2; // another empire's settlement site
+        surface.DistrictFrame++;
+        Refresh(settler, 131);
+        Check("another empire's settlement site stays out: INACTIVE", Inactive());
+        surface.SettlementOwner = 0; surface.SettlementIsCity = true; // the empire's own city site
+        surface.DistrictFrame++;
+        Refresh(settler, 131);
+        Check("an own city settlement site stays out: INACTIVE", Inactive());
+        surface.HasSettlement = false; surface.SettlementOwner = -1; surface.SettlementIsCity = false;
+        surface.DistrictFrame++;
+        Refresh(settler, 131);
+        Check("a settlement-free territory is admitted again", !Inactive() && AscendingUnique(PickSet.Current.Tiles));
+
+        // An army with no settler unit (FillSettlerAbilityFailures sets DontHaveAbility) hits the
+        // army gate: INACTIVE publishes nothing - no stars, no pins, no cursor-slot entry.
+        canvas.Started = 0; canvas.Stopped = 0;
+        plugin.Stars.Render(PickSet.Current); // reconcile the tracked fx to the active set
+        int trackedSettlerStars = PickSet.Current.Tiles.Length;
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.DontHaveAbility;
+        surface.TileGateCalls = 0;
+        Refresh(settler, 131);
+        Check("no settler unit publishes INACTIVE", Inactive());
+        canvas.Started = 0; canvas.Stopped = 0; // count only the INACTIVE reconcile
+        plugin.Stars.Render(PickSet.Current);
+        Check("no settler unit clears every tracked star", canvas.Stopped == trackedSettlerStars && canvas.Started == 0);
+        Check("no settler unit shows no pin and takes no vanilla fallback",
+            !GateAnswer(settlerTiles[0], true) && !GateAnswer(bestTile, true));
+        Check("no settler unit asks no tile gate", surface.TileGateCalls == 0);
+        Check("no settler unit leaves no cursor-slot entry: the cursor index points at nothing",
+            settler.CurrentPositionIndex == -1 && settler.ValidTiles[settlerSlot].TileIndex == -1
+            && settler.SettleFailure == ArmyActionFailureFlags.None);
+        surface.ArmyGateFlags = ArmyActionFailureFlags_Part1.None;
+
+        // INACTIVE in a settler mode (zero picks: every tile water) displays nothing.
+        canvas.Started = 0; canvas.Stopped = 0;
+        Refresh(settler, 131); // re-publish the admitted set: army gate clean, settlement-free
+        plugin.Stars.Render(PickSet.Current); // reconcile the tracked fx to the admitted set
+        int trackedBeforeZero = PickSet.Current.Tiles.Length;
+        surface.AllWater = true;
+        surface.DistrictFrame++;
+        Refresh(settler, 131);
+        Check("settler zero picks publish INACTIVE", Inactive());
+        canvas.Started = 0; canvas.Stopped = 0; // count only the INACTIVE reconcile
+        plugin.Stars.Render(PickSet.Current);
+        Check("settler INACTIVE clears every tracked star",
+            canvas.Stopped == trackedBeforeZero && canvas.Started == 0);
+        Check("settler INACTIVE shows no pin and leaves no pick entry",
+            !GateAnswer(settlerTiles[0], true) && !GateAnswer(bestTile, true)
+            && ScrubbedAdvisorSlots(settler, baseline, new int[0]) >= 0);
+        surface.AllWater = false;
+        surface.DistrictFrame++;
+        SetPresentationMode(ArmyActionType.CreateCamp);
+
         // F. Game surface contract: the membership mask (SPEC section 2 step 6) and the startup
         // name checks for every member the rewrite adds (no partial binding).
         var moneyInfluenceTerrain = (ArmyActionFailureFlags)(ArmyActionFailureFlags_Part1.NotEnoughMoney
@@ -823,6 +971,15 @@ internal static class Program
             required.Contains("Territory.Adjacencies") && required.Contains("Territory.TileIndexes"));
         Check("startup checks every surface member by exactly one name entry",
             GameApi.RequiredNames.Distinct().Count() == GameApi.RequiredNames.Length);
+        // The settler row is wired (ticket 18) and scores on the city-center definition: the only
+        // settlement input the settler session reaches is the district definition, never a
+        // settlement starting pack (the vanilla evaluator never reads it, SPEC section 3).
+        object settlerDefinition;
+        Check("the settler row is wired and reaches the city-center definition, no settlement starting pack",
+            ModePolicy.IsWired(ArmyActionType.FoundCityWithSettler)
+            && new GraphSurface().TryGetDistrictDefinition(ArmyActionType.FoundCityWithSettler, out settlerDefinition)
+            && (string)settlerDefinition == "cityCenter"
+            && !required.ToLower().Contains("startingpack"));
 
         // G. The camp pipeline at the takeover (ticket 13). Vanilla's full camp evaluation is
         // skipped, the scan pass publishes its admission set on the baseline the advisor
@@ -1051,7 +1208,7 @@ internal static class Program
         Check("every advisor slot above the live count is zeroed, cursor slot window included",
             ZeroFilledAboveCount(scanEval, scanEval.ValidTileCount,
                 cursorSlot + 1 + EvaluationWriter.TailCapacity));
-        var keptVanilla = NewEvaluation(ArmyActionType.FoundCityWithSettler, baseline);
+        var keptVanilla = NewEvaluation(ArmyActionType.Ransack, baseline); // a mode the table has not wired
         var keptSignature = Signature(keptVanilla);
         Check("a mode the table has not wired keeps vanilla's own refresh, its own cursor entry included",
             Refresh(keptVanilla, 5001) && Signature(keptVanilla) == keptSignature && Inactive());

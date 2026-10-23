@@ -33,6 +33,7 @@ internal sealed class GraphSurface : GameSurface
     public bool[] Claimed;
     public int[] OwnerEmpire; // owning empire per territory, -1 unowned: an owner steal moves the stamp
     public bool[] HasSettlement;
+    public bool[] IsOwnedByCity; // the settlement is a city: a settler replaces only an own camp/pre-camp
     public bool[] AllOcean; // territory ocean flags: never a filter
     public int[][] Tiles; // settlement-site tiles per territory
     public Dictionary<int, int> ScoreByTile = new Dictionary<int, int>();
@@ -116,6 +117,7 @@ internal sealed class GraphSurface : GameSurface
         facts.IsEdgeOfTheWorld = IsEdgeOfTheWorld[territoryIndex];
         facts.Claimed = Claimed[territoryIndex];
         facts.HasSettlement = HasSettlement[territoryIndex];
+        facts.IsOwnedByCity = IsOwnedByCity[territoryIndex];
         facts.OwnerEmpireIndex = OwnerEmpire[territoryIndex];
         facts.Tiles = Tiles[territoryIndex];
         return TerritoryFactsResult.Known;
@@ -249,14 +251,39 @@ internal static class Program
 
         // The FoundCity row (649-652): drop IsEdgeOfTheWorld and drop SettlementGUID != 0, and
         // nothing else - a Claimed territory with no settlement on it stays claimable for a city,
-        // exactly where the camp row drops it. A mode with no row filters everything: nothing is
-        // admitted.
+        // exactly where the camp row drops it.
         Expect("FoundCity: an IsEdgeOfTheWorld territory is dropped", Pick(edge, ArmyActionType.FoundCity, 2, 1));
         Expect("FoundCity: a territory with a settlement is dropped", Pick(site, ArmyActionType.FoundCity, 2, 1));
         Expect("FoundCity: a Claimed territory with no settlement stays claimable",
             Pick(claimed, ArmyActionType.FoundCity, 2, 1), 101, 102);
         Expect("camp: the same Claimed territory is dropped", Pick(claimed, ArmyActionType.CreateCamp, 2, 1));
-        Expect("a mode with no row in the table claims nothing", Pick(claimed, ArmyActionType.FoundCityWithSettler, 2, 1));
+
+        // The FoundCityWithSettler row (740-753, replaceability 763-771): drop IsEdgeOfTheWorld and
+        // drop SettlementGUID != 0 EXCEPT the empire's own camp/pre-camp settlement, which the
+        // settler replaces. An own city, another empire's settlement, and an unowned settlement all
+        // stay out; a settlement-free territory is admitted, and a Claimed territory with no
+        // settlement stays claimable (no Claimed term), exactly as on the city row.
+        var ownCamp = Camp(tiles: 3, scores: new[] { 10, 20, 30 });
+        ownCamp.HasSettlement[0] = true; ownCamp.OwnerEmpire[0] = 0; ownCamp.IsOwnedByCity[0] = false;
+        Expect("Settler: an own camp/pre-camp settlement is admitted (replaceable)",
+            Pick(ownCamp, ArmyActionType.FoundCityWithSettler, 2, 1), 101, 102);
+        var ownCity = Camp(tiles: 3, scores: new[] { 10, 20, 30 });
+        ownCity.HasSettlement[0] = true; ownCity.OwnerEmpire[0] = 0; ownCity.IsOwnedByCity[0] = true;
+        Expect("Settler: an own city settlement site stays out",
+            Pick(ownCity, ArmyActionType.FoundCityWithSettler, 2, 1));
+        var otherCamp = Camp(tiles: 3, scores: new[] { 10, 20, 30 });
+        otherCamp.HasSettlement[0] = true; otherCamp.OwnerEmpire[0] = 2; otherCamp.IsOwnedByCity[0] = false;
+        Expect("Settler: another empire's settlement site stays out",
+            Pick(otherCamp, ArmyActionType.FoundCityWithSettler, 2, 1));
+        Expect("Settler: an unowned settlement site stays out",
+            Pick(site, ArmyActionType.FoundCityWithSettler, 2, 1));
+        Expect("Settler: an IsEdgeOfTheWorld territory is dropped",
+            Pick(edge, ArmyActionType.FoundCityWithSettler, 2, 1));
+        var plain = Camp(tiles: 3, scores: new[] { 10, 20, 30 });
+        Expect("Settler: a settlement-free territory is admitted",
+            Pick(plain, ArmyActionType.FoundCityWithSettler, 2, 1), 101, 102);
+        Expect("Settler: a Claimed territory with no settlement stays claimable",
+            Pick(claimed, ArmyActionType.FoundCityWithSettler, 2, 1), 101, 102);
 
         var ocean = Camp(tiles: 3, scores: new[] { 10, 20, 30 });
         ocean.AllOcean[0] = true; // sea-flagged territory with land sites
@@ -341,6 +368,26 @@ internal static class Program
         Expect("FoundCity: an army-level gate hit skips the scan", Pick(cityLocked, ArmyActionType.FoundCity, 2, 1));
         Check("FoundCity: an army-level gate hit asks the tile gate no tile", cityLocked.TileGateCalls == 0);
 
+        // The same money/influence mask on the settler row's gate call (SPEC section 3):
+        // affordability stays out of membership and every other failure drops the tile. An army
+        // with no settler unit (FillSettlerAbilityFailures sets DontHaveAbility) hits the army
+        // gate, so the scan is skipped: nothing is published and no tile gate is asked.
+        var settlerGate = Camp(tiles: 3, scores: new[] { 30, 10, 30 });
+        settlerGate.TileGateFlags[100] = ArmyActionFailureFlags_Part1.NotEnoughMoney
+            | ArmyActionFailureFlags_Part1.NotEnoughInfluence;
+        Expect("Settler: the mask keeps an unaffordable tile in the admission set",
+            Pick(settlerGate, ArmyActionType.FoundCityWithSettler, 1, 1), 100, 102);
+        var settlerBlocked = Camp(tiles: 3, scores: new[] { 30, 20, 10 });
+        settlerBlocked.TileGateFlags[100] = ArmyActionFailureFlags_Part1.TerrainNotValid;
+        Expect("Settler: every other gate failure drops the tile",
+            Pick(settlerBlocked, ArmyActionType.FoundCityWithSettler, 2, 1), 101, 102);
+        var noSettler = Camp(tiles: 3, scores: new[] { 30, 20, 10 });
+        noSettler.ArmyGateFlags = ArmyActionFailureFlags_Part1.DontHaveAbility;
+        noSettler.TileGateCalls = 0;
+        Expect("Settler: an army with no settler unit skips the scan",
+            Pick(noSettler, ArmyActionType.FoundCityWithSettler, 2, 1));
+        Check("Settler: no settler unit asks the tile gate no tile", noSettler.TileGateCalls == 0);
+
 
     }
 
@@ -392,8 +439,16 @@ internal static class Program
 
         // A mode the table has not wired runs no rules: no picks, and no entry to displace.
         Expect("a mode the table has not wired fails closed",
-            Pick(computation, surface, ArmyActionType.FoundCityWithSettler, 2, 1));
+            Pick(computation, surface, ArmyActionType.Ransack, 2, 1));
         Expect("an unwired-mode pass leaves the camp entry untouched",
+            Pick(computation, surface, ArmyActionType.CreateCamp, 2, 1));
+
+        // The settler row is its own cache entry: like the city row its filter keeps a Claimed
+        // territory with no settlement claimable (no Claimed term), so a settler pass publishes
+        // where the camp pass dropped the territory, and the camp entry still stands behind it.
+        Expect("the settler row has its own cache entry (a Claimed territory stays claimable)",
+            Pick(computation, surface, ArmyActionType.FoundCityWithSettler, 2, 1), 100, 101);
+        Expect("the camp entry still stands after the settler pass",
             Pick(computation, surface, ArmyActionType.CreateCamp, 2, 1));
         surface.Claimed[0] = false;
         surface.TerritoryFrame++;
@@ -572,15 +627,15 @@ internal static class Program
         if (!allEdges) s_Failures++;
 
         // Mode dispatch runs before any mode fact is read: each wired row reaches its own district
-        // definition - CampDefinition for camp, CityCenterDefinition for city founding - and an
-        // unwired mode reaches the surface no definition at all. The rules never hardcode one.
+        // definition - CampDefinition for camp, CityCenterDefinition for both city founding modes -
+        // and an unwired mode reaches the surface no definition at all. The rules never hardcode one.
         var modes = new[] { ArmyActionType.CreateCamp, ArmyActionType.FoundCity, ArmyActionType.FoundCityWithSettler };
         fan.DefinitionRequests = "";
         for (int m = 0; m < modes.Length; m++)
             new PickComputation(fan).Compute(CursorContext.For(0, "army", 0, 2, 1, 2, modes[m]));
-        bool perMode = fan.DefinitionRequests == "CreateCamp=camp\nFoundCity=cityCenter\n";
+        bool perMode = fan.DefinitionRequests == "CreateCamp=camp\nFoundCity=cityCenter\nFoundCityWithSettler=cityCenter\n";
         Console.WriteLine("[rngc3] definitions asked per mode=" + fan.DefinitionRequests.Replace("\n", " ")
-            + " expected=CreateCamp=camp FoundCity=cityCenter" + (perMode ? "  OK" : "  MISMATCH"));
+            + " expected=CreateCamp=camp FoundCity=cityCenter FoundCityWithSettler=cityCenter" + (perMode ? "  OK" : "  MISMATCH"));
         if (!perMode) s_Failures++;
 
         // Unmapped placement modes fail closed: no picks, no writes.
@@ -598,6 +653,7 @@ internal static class Program
         surface.OwnerEmpire = new int[5];
         for (int i = 0; i < 5; i++) surface.OwnerEmpire[i] = -1; // unowned
         surface.HasSettlement = new bool[5];
+        surface.IsOwnedByCity = new bool[5];
         surface.AllOcean = new bool[5];
         surface.UnknownFacts = new bool[5];
         surface.UnknownAdjacency = new bool[5];

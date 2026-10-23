@@ -441,6 +441,7 @@ namespace SettlementPlacementAdvisor
                 facts.IsEdgeOfTheWorld = info.IsEdgeOfTheWorld;
                 facts.Claimed = info.Claimed;
                 facts.HasSettlement = info.SettlementGUID != 0UL;
+                facts.IsOwnedByCity = info.IsOwnedByCity;
                 facts.OwnerEmpireIndex = info.EmpireIndex == byte.MaxValue ? -1 : (int)info.EmpireIndex;
                 var siteTiles = territories[territoryIndex].TileIndexes;
                 if (siteTiles != null) facts.Tiles = siteTiles;
