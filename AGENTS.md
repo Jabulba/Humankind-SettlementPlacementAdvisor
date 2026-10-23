@@ -50,9 +50,11 @@ reflection adapter.
   The mode-policy table wires `CreateCamp` and `FoundCity`; the three modes share
   `CampPlacementEvaluation`, so a mode the table has not wired writes nothing and an activation
   scrubs the tail the previous mode's session left. The write-side harness enforces this.
-- `EvaluationWriter` owns a fixed tail window in the shared `ValidTiles` array. Write pick slots
-  in place, barrier, then raise `ValidTileCount`; never move vanilla entries. A settlement tail left
-  after a mode switch must be scrubbed, not merely counted down.
+- `EvaluationWriter` owns a tail window in the shared `ValidTiles` array, sized from config at the
+  activation and grown on demand. Write pick slots in place, barrier, then raise `ValidTileCount`;
+  never move vanilla entries, never sweep the array, and zero only the slots a refresh releases. A
+  settlement tail left after a mode switch must be scrubbed over the whole region ever reserved, not
+  merely counted down.
 - `PickSet.Current` is the only cross-thread channel: immutable, volatile, version-gated, with
   entering/leaving diffs. Do not add other shared mutable state or touch Unity objects on the
   simulation thread.
