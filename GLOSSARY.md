@@ -45,6 +45,22 @@ the domain and the modules at its seams.
   pins to array indices, stable slots keep every retained pick bound; only the cursor tile's
   element changes within one pick set. Vanilla scores the array's whole length, not the valid
   count, so a tail left by a mode switch must be scrubbed, not just counted down.
+- **Placement neighborhood**: the set of territories the advisor scans: the hovered
+  territory (level 1) plus `RangeLevels` hops over all adjacency edges, covering every
+  tile of every territory in it. Sea, cliff, mountain and closed edges each count as a
+  hop; there is no movement, zone-of-control, reachability, or land-only filter.
+- **Claimable territory**: a territory of the placement neighborhood that passes the
+  active mode's territory filter, so that mode's advisor scans it and admits from it.
+- **Top tie set**: every tile tied with the last admitted score of a territory's
+  admission. Admission is the territory's quota (`TopHovered` on the hovered territory,
+  `TopNeighbour` on every other) plus the full top tie set: no tie cap, no star cap.
+- **Scan pass**: one full evaluation of the placement neighborhood, cache-served per
+  territory: a refresh re-serves cached territories and evaluates only what changed.
+- **Shown set**: the published pick set, equal to the merged admission set of a scan
+  pass. Stars and pins are its renderings; nothing outside the shown set displays.
+- **Cursor slot**: the advisor-owned `TailStart` entry of the tail, carrying the hovered
+  tile's gate result: the single surviving path to the ghost, the territory highlight,
+  and the settlement mouse marker.
 
 ## Modules
 
