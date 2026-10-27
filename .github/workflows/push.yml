@@ -44,11 +44,5 @@ jobs:
       - name: Build
         run: dotnet build SettlementPlacementAdvisor.csproj -c Release
 
-      - name: Range harness
-        run: bash scripts/test-range.sh
-
-      - name: No-op harness
-        run: bash scripts/test-noop.sh
-
-      - name: Scan harness
-        run: bash scripts/test-scan.sh
+      - name: Test
+        run: dotnet test tests -c Release
