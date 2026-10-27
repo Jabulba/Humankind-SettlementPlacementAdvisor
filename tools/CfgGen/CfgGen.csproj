@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!-- RELEASE CONFIG GENERATOR: writes the pre-generated cfg shipped in releases with the game's
+         own ConfigFile writer, carrying the plugin header. Production binds, no copies:
+         AdvisorConfig.Bind. The advisor's settings therefore match the shipped plugin with no
+         duplicated descriptions. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>7.3</LangVersion>
+        <Nullable>disable</Nullable>
+        <AssemblyName>CfgGen</AssemblyName>
+        <RootNamespace>CfgGen</RootNamespace>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+        <NoWarn>CS0436;CS1701;CS1702;MSB3277</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Program.cs"/>
+        <Compile Include="..\..\AdvisorConfig.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- BepInEx's ConfigFile writer and the game assemblies, from the GameLibs feed pinned by
+             $(GameLibsPin), the one label every project restores. Runtime assets are needed: this
+             headless tool writes the cfg with the game's own writer. -->
+        <PackageReference Include="Humankind.GameLibs" Version="[$(GameLibsPin)]"/>
+    </ItemGroup>
+</Project>

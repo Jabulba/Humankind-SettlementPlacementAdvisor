@@ -58,29 +58,6 @@ the committed solution lists the decompiled projects under a build-disabled `ref
 project files only exist after `decompile-game.sh` (needs `ilspycmd`) + `gen-explorer.sh` have run - until then the
 IDE shows the two entries as missing.
 
-## Feed and CI
-
-Restore resolves compile-time game assemblies from the private `Humankind.GameLibs` package: feed
-`https://nuget.pkg.github.com/Jabulba/index.json`, repo `Jabulba/Humankind-GameLibs`. Package content: every
-`Humankind_Data/Managed` DLL + `BepInEx/core` DLLs (minus `0Harmony20`, which duplicates 0Harmony types and breaks
-compiles). Version = game build number, `-rN` = package revision. Pins are exact brackets
-(`Version="[1.0.31.4851-r2]"`): bare pins float upward in NuGet semantics. Authentication: `GAMELIBS_PAT` env var
-(interpolated in `nuget.config`).
-
-- CI: repo secret `GAMELIBS_PAT` (PAT with `read:packages`), exported as env in both workflows. Public-repo
-  `GITHUB_TOKEN` gets 403 on personal-account private packages (upstream limitation).
-- Local: export a PAT with `read:packages` as `GAMELIBS_PAT` in your shell profile (`export GAMELIBS_PAT=$(gh auth token)`).
-- Machine-only folder feed: add `<path-to>/Humankind-GameLibs/pkg` to `~/.nuget/NuGet/NuGet.Config`, not to the repo's
-  `nuget.config` (NuGet hard-errors on a missing source in CI, and the repo config has no `<clear/>` so machine sources
-  merge in). The folder feed makes local restore instant; the GitHub Packages index needs minutes to propagate after a
-  publish, so a CI restore right after one can fail with NU1102: rerun the workflow, do not republish.
-- Game update: repack with `scripts/publish-gamelibs.sh <game-build-number>` using a PAT with `write:packages`, then
-  bump the exact pins in all five pinning csproj files (`SettlementPlacementAdvisor.csproj` and the `cfggen`,
-  `noopcircuit`, `rangecircuit`, `scancircuit` projects under `scripts/`).
-
-Push CI (`.github/workflows/push.yml`): commit-message lint over the pushed range, Release build, and all three
-harnesses (`scripts/test-range.sh`, `scripts/test-noop.sh`, `scripts/test-scan.sh`).
-
 ## Versioning and releases
 
 MinVer derives the version from git tags; it is stamped into the `BepInPlugin` attribute at compile time
