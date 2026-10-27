@@ -58,11 +58,14 @@ the committed solution lists the decompiled projects under a build-disabled `ref
 project files only exist after `decompile-game.sh` (needs `ilspycmd`) + `gen-explorer.sh` have run - until then the
 IDE shows the two entries as missing.
 
-## Versioning and releases
+## Docs and their roles
 
-MinVer derives the version from git tags; it is stamped into the `BepInPlugin` attribute at compile time
-(`GenerateModVersion` target). Untagged builds compute `1.0.0-alpha.0.<n>` (`<n>` is the distance from the latest tag).
+| File                          | Written for                     | Role                                                                                                                      |
+|---|---|---|
+| `README.md`                   | Players installing the mod      | The shipped human document: install, usage, settings, troubleshooting. Player words; a rule summary, not the rule source. |
+| `AGENTS.md`                   | AI coding assistants            | The working guide: commands, setup, gotchas, conventions, doc pointers.                                                   |
+| `GLOSSARY.md`                 | Everyone working in the code    | Module and domain vocabulary. Name things with these words.                                                               |
+| `CONTRIBUTING.md` (this file) | Contributors, humans and agents | Commit standard (format, types, scopes) and per-clone setup.                                                              |
+| `RESOURCES.md`                | Anyone needing evidence         | External docs and local anchors for vanilla-behavior facts.                                                               |
 
-Release = push an annotated tag `vX.Y.Z`; `.github/workflows/release.yml` builds, generates the pre-generated cfg
-(`scripts/gen-cfg.sh`), zips `{SettlementPlacementAdvisor.dll, LICENSE, README.md, cfg}` and publishes the GitHub
-Release with git-cliff notes (pinned v2.14.2 binary). `CHANGELOG.md` is not kept; Releases is the changelog.
+Commit every behavior change as one commit containing the code and the contract comments that state the new rule.
