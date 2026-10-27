@@ -1,9 +1,12 @@
 name: build
 
+# Build CI for main: pushes to main build, and PRs opened against main build.
+# The job lints the commits between the merge base and HEAD, then builds and tests.
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   build:
