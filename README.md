@@ -3,31 +3,20 @@
 [![build](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/actions/workflows/push.yml/badge.svg)](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/actions/workflows/push.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A BepInEx 5 mod for **HUMANKIND** that helps you choose where to place settlements.
+Replace the vanilla mechanic that suggests where to place a settlement with a more coherent logic: two recommendations
+for the terrain with the cursor and the tile at the cursor, and one recommendation for adjacent territories. Minimum
+FIMs, territory border, and cost filter removed. When top recommendations tie, they are shown in full, so the count of
+suggestions can be higher than two and one. The suggestions appear as the game's own white recommended tiles and FIMS
+pins - the mod draws nothing new on the map.
 
-While the settlement placement cursor is active, the advisor marks the best tiles with stars and
-shows their FIMS yields as pins. The hovered territory gets its top two recommendations; every
-other territory within land-adjacency range gets its best one. City founding is left completely
-alone.
-
-## Features
-
-- **Recommended-tile stars** for the hovered territory and nearby territories.
-- **FIMS pins** so you can compare Food, Industry, Money and Science at a glance.
-- **Land-aware range**: sea, cliff, mountain and closed-border edges never extend the
-  recommendation range.
-- **Uses the game's own evaluation**, including its settlement score weighting.
-- **Safe around city founding**: cities keep their vanilla glyphs, pins and cursor, and any
-  settlement tail is released when a city session starts.
-- **Configurable counts and range**, no external data files required.
-
-The advisor only makes recommendations. Normal placement rules still apply.
+The vanilla code suggests at most the two best tiles, picked from the tiles your army can reach in two turns, filtering
+out any tile with less than 25 FIMS score, at the territory border or that you can't afford.
 
 ## Installation
 
 ### Requirements
 
-- HUMANKIND (the paths below assume the Steam install).
+- HUMANKIND.
 - [BepInEx 5](https://docs.bepinex.dev/) (Mono) installed in the game directory.
 
 ### Steps
@@ -36,9 +25,7 @@ The advisor only makes recommendations. Normal placement rules still apply.
    [Releases page](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/releases).
 2. Copy `SettlementPlacementAdvisor.dll` into the game's `BepInEx/plugins` folder.
 3. Optionally copy `com.jabulba.settlementplacementadvisor.cfg` into `BepInEx/config`.
-   If you skip this step, the game generates the file with the same defaults on first launch.
-4. Start the game. BepInEx loads plugins only at startup, so restart after installing or
-   updating the mod.
+4. Start or restart the game. BepInEx loads plugins only at startup.
 
 Typical plugin locations:
 
@@ -50,70 +37,41 @@ Typical plugin locations:
 ~/.local/share/Steam/steamapps/common/Humankind/BepInEx/plugins/
 ```
 
-## Usage
+### The tile under the cursor
 
-1. Select an army and start **settlement placement**.
-2. Hover over a territory. Recommended tiles in the hovered territory and in nearby territories
-   are marked with stars.
-3. Check the FIMS pins to compare the candidates.
-4. Place the settlement on the tile you prefer. The advisor does not restrict your choice.
+The tile your cursor sits on keeps the game's own marker and pin, exactly as in the vanilla placement cursor; when that
+tile is also a recommendation, the game shows it as a hovered recommended tile. The game hides that marker when the tile
+can't be afforded at the cursor, and hiding it there changes nothing else: the recommendation on that tile stays, and
+every other recommendation keeps its marker and pin.
 
-The default rules are:
+## Settings
 
-| Territory | Recommendations |
-|---|---|
-| Hovered territory | Top 2 tiles |
-| Each territory in range | Top 1 tile |
+The config file lives at `BepInEx/config/com.jabulba.settlementplacementadvisor.cfg`; the release zip ships a
+ready copy, and the game generates the same defaults on first launch without it.
 
-A tile gets no star when it is unexplored, already owned, or water. Water is filtered per
-tile: sea-flagged territories can host valid camp sites, so the advisor never skips a
-territory for its ocean flag. The configured counts are
-mandatory rather than a minimum-FIMS filter: tiles below the vanilla minimum-FIMS threshold are
-still eligible.
+| Knob | Type | Default | Bounds | Effect |
+|---|---|---:|---|---|
+| `TopHovered` | int | `2` | >= 1, clamped | Admission quota on the hovered territory: this many tiles minimum, plus every tile tied with the last admitted score |
+| `TopNeighbour` | int | `1` | >= 1, clamped | Same quota on every other territory in the placement neighborhood; 0 is not allowed, so the display is never hovered-only |
+| `RangeLevels` | int | `2` | >= 1, no upper bound | Placement-neighborhood hops from the hovered territory, which counts as level 1: 3 = hovered + adjacent + adjacent-to-adjacent. Every adjacency edge counts as a hop: sea, cliff, mountain and closed-border edges included |
 
-## Configuration
+## How it decides, briefly
 
-The config file lives at:
-
-```text
-BepInEx/config/com.jabulba.settlementplacementadvisor.cfg
-```
-
-| Setting | Default | Meaning |
-|---|---:|---|
-| `TopHovered` | `2` | Recommendations on the hovered territory |
-| `TopNeighbour` | `1` | Recommendations on every other territory in range |
-| `RangeLevels` | `2` | Land-adjacency range; the hovered territory counts as level 1 |
-
-`RangeLevels = 2` means the hovered territory plus directly adjacent land territories.
-`RangeLevels = 3` adds territories adjacent to those. Values below 1 are clamped to 1.
-
-The tile under the mouse ghost remains part of the vanilla placement cursor, so it can add one
-visual highlight on top of the configured count.
-
-## How it works
-
-The mod hooks the game's settlement placement evaluation after vanilla refreshes the cursor
-position. It then:
-
-1. Walks the hovered territory and its land-adjacent neighbours.
-2. Evaluates candidate tiles with the game's own settlement evaluation.
-3. Keeps the best candidates per territory, using a frame-aware cache.
-4. Writes the selected tiles into a fixed tail of the placement evaluation, then publishes an
-   immutable pick set for the presentation side.
-5. Renders stars and controls the FIMS pin gate from that pick set.
-
-All writes are restricted to `CreateCamp`. `FoundCity` and `FoundCityWithSettler` share the same
-evaluation type, which is why city sessions are a strict no-op: no stars, no pins, no glyph
-changes, and no cursor interference.
+- It works out which territories the search covers for the tile you are hovering.
+- It drops the territories your current action cannot use, then the tiles that cannot host the settlement (unexplored,
+  water, wrong terrain, blocked by the game's own placement rules).
+- It scores the remaining tiles with the game's own settlement scoring and takes the best ones per territory, always
+  including every tie.
+- Results are cached per territory, so moving the mouse is nearly free; a territory is only re-scored when something
+  that affects it changes (a claim, an exploration, a patrol, a settlement appearing). The cache belongs to the game
+  you are playing: a new game re-scores from scratch.
+- A recommendation is advice, not a guarantee: the game's own rules still decide whether the order is legal when you
+  give it (army state, costs, enemy armies, and so on).
 
 ## Compatibility
 
-- Built against HUMANKIND game assemblies `1.0.31.4851` (GameLibs `1.0.31.4851-r2`).
+- The mod is built for a specific game version. Download the correct mod version for your version of the game.
 - Requires BepInEx 5 on the Mono/Unity player.
-- A game update can rename the internal members the mod reflects over. When that happens the
-  advisor disables itself and logs `Disabled, unresolved game members` instead of crashing.
-  A new mod build against the updated game assemblies is then required.
 
 ## Troubleshooting
 
@@ -125,60 +83,48 @@ Check the BepInEx log first:
 
 Search for `SettlementPlacementAdvisor`.
 
-| Symptom | Check |
-|---|---|
-| No stars at all | Is the plugin loaded? Are you in settlement placement, not city founding? |
-| A territory has no stars | Tiles must be explored, unowned and non-water; claimed territories are skipped |
-| No recommendations anywhere on this hover | Vanilla recommendations take over when every territory in range has nothing to advise |
-| `Disabled, unresolved game members` | The game build changed; report the log and game version in an issue |
-| Nothing appears until the cursor moves | The mod wires star rendering on the first settlement placement refresh |
+- **The mod did not load at all, game closed**: one of the load failure lines above. A line naming a game build newer
+  than the mod needs a mod build for your game version; a line naming your own game build means the game internals are
+  there and something else is replacing them - test with this mod alone.
+- **Loaded, no recommendations**: check the placement mode is one of the three the mod advises (camp, city founding,
+  city founding with a settler), and look for advisor lines in the log.
 
-Under Proton, early `Awake`-path exceptions appear in the prefix's `Player.log` rather than
-`LogOutput.log`.
+Under Proton, early startup errors from this mod appear in the Proton prefix's `Player.log`
+rather than in `LogOutput.log`.
 
 ## Building from source
 
 ### Prerequisites
 
 - .NET SDK 10. The helper scripts expect it at `~/.dotnet` unless `DOTNET_ROOT` is set.
-- HUMANKIND installed through Steam, or `GAME_DIR` pointing at the install.
-- A GitHub token with `read:packages` for the private `Humankind.GameLibs` feed, exported as
-  `GAMELIBS_PAT`.
+- HUMANKIND installed. The mod compiles against the game's own assemblies and deploys into the install, so the build
+  needs it. It is found from `-p:GameDir=...`, then `GAME_DIR`, then the standard Steam Linux location
+  (`~/.local/share/Steam/steamapps/common/Humankind`).
 
 ```bash
 git clone https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor.git
 cd Humankind-SettlementPlacementAdvisor
 
-export GAMELIBS_PAT=$(gh auth token)   # token needs read:packages
-
 scripts/build-advisor.sh               # Release build, deploys to BepInEx/plugins
-scripts/test-range.sh                  # land-range harness
-scripts/test-noop.sh                   # city no-op / pin / tail contract
 ```
 
-The build resolves the game directory from `-p:GameDir=...`, then `GAME_DIR`, then the standard
-Steam Linux location. If the install is not found, the build still succeeds but skips deployment
-and prints a warning. BepInEx only loads plugins at process start, so restart the game after a
-rebuild.
+The mod compiles against the game's own assemblies: from the private `Humankind.GameLibs`
+feed when `GAMELIBS_PAT` is exported, otherwise from your game install (a missing install then fails the build with a
+pointer to `GAME_DIR`). When the build succeeds against the feed on a machine with no install, deployment is skipped
+with a printed warning.
 
-The test harnesses are headless console applications and do not need a running game. They cover
-the real pick computation, the real land-adjacency filter, and the real patch entry points over
-synthetic territory graphs.
+[CONTRIBUTING.md](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/blob/main/CONTRIBUTING.md)
+covers the commit standard and the per-clone setup. Please read it before submitting a pull request.
 
-For the commit standard, game-libs feed setup and release process, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+## Reporting problems
 
-## Contributing
-
-Bug reports and pull requests are welcome. Please include:
+Bug reports and pull requests are welcome on the
+[repository issues page](https://github.com/Jabulba/Humankind-SettlementPlacementAdvisor/issues). Please include:
 
 - The game version.
 - The relevant `LogOutput.log` excerpt.
-- Whether the issue happens during settlement placement or city founding.
-- A clear description of the expected and actual recommendations.
-
-Commits follow the Conventional Commits format enforced by `scripts/hooks/commit-msg`; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+- The placement mode: settlement placement, city founding, or city founding with a settler.
+- A clear description of the recommendations you expected and the ones you got.
 
 ## License
 

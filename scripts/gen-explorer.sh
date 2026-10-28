@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Generate an IDE-browsable solution over the decompiled reference trees.
+# Add the decompiled reference trees to the main solution for IDE browsing.
 # Run scripts/decompile-game.sh first; this only wires up project files.
 #
-# Output (all inside the gitignored reference/ tree):
-#   reference/Explorer.sln                  # opens both trees in one workspace
+# Output:
 #   reference/Directory.Build.props         # shared build settings + warning noise
+#   main-solution entries: a solution folder "reference" holding both decompiled
+#     projects, build-disabled (ActiveCfg entries only, no Build.0), so building
+#     the main solution never compiles them. The sln is committed, the project
+#     files are gitignored: run this script after a fresh clone too, or the IDE
+#     shows the two entries as missing.
 #   patched csproj files (idempotent):
 #     net40 -> netstandard2.1 target
 #     Assembly-CSharp: binary Firstpass reference replaced by a ProjectReference,
@@ -33,7 +37,7 @@ OUT="${OUT:-$REPO_ROOT/reference/managed}"
 OUTGAME_DIR="${OUTGAME_DIR:-$OUT/../outgame}"
 FP_PROJ="$OUT/firstpass/Amplitude.Mercury.Firstpass.csproj"
 OC_PROJ="$OUTGAME_DIR/assembly-csharp/Assembly-CSharp.csproj"
-SLN="$REPO_ROOT/reference/Explorer.sln"
+SLN="$REPO_ROOT/Humankind-SettlementPlacementAdvisor.sln"
 PROPS="$REPO_ROOT/reference/Directory.Build.props"
 
 [ -f "$FP_PROJ" ] || { echo "missing $FP_PROJ; run scripts/decompile-game.sh first" >&2; exit 1; }
@@ -110,36 +114,70 @@ for proj in (fp_proj, oc_proj):
     open(proj, "w").write(text)
 PY
 
-cat > "$SLN" <<'EOF'
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.0.31903.59
-MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Amplitude.Mercury.Firstpass", "managed\firstpass\Amplitude.Mercury.Firstpass.csproj", "{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A001}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Assembly-CSharp", "outgame\assembly-csharp\Assembly-CSharp.csproj", "{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A002}"
-EndProject
-Global
-	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|Any CPU = Debug|Any CPU
-		Release|Any CPU = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A001}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A001}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A001}.Release|Any CPU.Build.0 = Release|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A002}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A002}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A002}.Release|Any CPU.Build.0 = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-EndGlobal
-EOF
+# Main-solution entries, idempotent on the fixed GUIDs. Build stays disabled:
+# every solution config gets an ActiveCfg entry per project and no Build.0 line,
+# so building the main solution compiles only plugin/tests/CfgGen while the IDE
+# still loads the decompiled trees for browsing. The sln is committed and the
+# project files are gitignored; on a fresh clone the entries show as missing
+# until scripts/decompile-game.sh has run.
+rm -f "$REPO_ROOT/reference/Explorer.sln"  # superseded by the main-solution entries
+python3 - "$SLN" <<'PY'
+import re, sys
 
-echo "==> Solution: $SLN"
-echo "Open Explorer.sln (or Explorer.csproj's Assembly-CSharp project) for completion and navigation."
-echo "Build check: dotnet build \"$SLN\""
+sln_path = sys.argv[1]
+text = open(sln_path, encoding="utf-8-sig").read()
+nl = "\r\n" if "\r\n" in text else "\n"
+FOLDER = ("reference", "{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A003}")
+PROJECTS = [
+    ("Amplitude.Mercury.Firstpass",
+     r"reference\managed\firstpass\Amplitude.Mercury.Firstpass.csproj",
+     "{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A001}"),
+    ("Assembly-CSharp",
+     r"reference\outgame\assembly-csharp\Assembly-CSharp.csproj",
+     "{3F0A6C41-9A1B-4E6D-9B62-1C5D47E7A002}"),
+]
+if FOLDER[1] in text:
+    # Fresh decompile re-runs this script for the csproj patches; the entries persist.
+    print("main-solution entries already present; sln untouched")
+    sys.exit(0)
+
+# Every configuration of the main solution gets an ActiveCfg entry (no Build.0).
+sec = re.search(r"GlobalSection\(SolutionConfigurationPlatforms\) = preSolution\n(.*?)EndGlobalSection", text, re.S)
+configs = [m.group(1) for s in sec.group(1).splitlines()
+           for m in [re.match(r"^(.+) = (.+)$", s.strip())]
+           if m and m.group(1) == m.group(2)]
+if not configs:
+    sys.exit("no solution configurations found")
+
+# Project + folder entries go right before the Global section.
+entries = f'Project("{{2150E333-8FDC-42A3-9474-1A3956D46DE8}}") = "{FOLDER[0]}", "{FOLDER[0]}", "{FOLDER[1]}"{nl}EndProject{nl}'
+for name, path, guid in PROJECTS:
+    entries += f'Project("{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}") = "{name}", "{path}", "{guid}"{nl}EndProject{nl}'
+pos = re.search(r"^Global\s*$", text, re.M).start()
+text = text[:pos] + entries + text[pos:]
+
+# ActiveCfg-only platform entries.
+sec = re.search(r"GlobalSection\(ProjectConfigurationPlatforms\) = postSolution\n(.*?)EndGlobalSection", text, re.S)
+added = "".join(f"\t\t{guid}.{cfg}.ActiveCfg = {cfg}{nl}"
+                for _, _, guid in PROJECTS for cfg in configs)
+# The capture ends with the EndGlobalSection line's leading tabs: insert before them.
+pos = sec.start(1) + len(sec.group(1).rstrip("\t"))
+text = text[:pos] + added + text[pos:]
+
+# Nest both projects under the solution folder.
+added = "".join(f"\t\t{guid} = {FOLDER[1]}{nl}" for _, _, guid in PROJECTS)
+sec = re.search(r"GlobalSection\(NestedProjects\) = preSolution\n(.*?)EndGlobalSection", text, re.S)
+if sec:
+    pos = sec.start(1) + len(sec.group(1).rstrip("\t"))
+    text = text[:pos] + added + text[pos:]
+else:
+    text = text.replace("EndGlobal" + nl,
+                        f"\tGlobalSection(NestedProjects) = preSolution{nl}" + added +
+                        f"\tEndGlobalSection{nl}" + "EndGlobal" + nl, 1)
+
+open(sln_path, "w", encoding="utf-8-sig", newline="").write(text)
+PY
+
+echo "==> Main solution updated: $SLN"
+echo "Open the main solution: the reference folder holds both decompiled trees for completion and navigation, build-disabled."
+echo "Build check: dotnet build \"$SLN\" (the reference projects stay unbuilt)"

@@ -1,0 +1,167 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- HEADLESS TEST PROJECT: compiles the production sources - composition/Plugin.cs included, never
+         instantiated - into the test assembly: same files and same reference set as the shipped
+         plugin, no ProjectReference (a net10.0 project cannot compile net472 references: Roslyn drops
+         them silently). Run: dotnet test tests (local mode: game install via LocalGameLibs; CI: the
+         Humankind.GameLibs feed via GAMELIBS_PAT). Tiers: T1 pipeline rules on a scripted
+         GameSurface, T2 Harmony takeover on real game types, T3 startup binding.
+         Expected noise: NU1701 (net472 game assemblies), MSB3277 - same set as the plugin build. -->
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <!-- LangVersion 7.3 (not 'latest'): this project compiles the same production sources as the
+             net472 plugin, which is pinned to C# 7.3. A higher LangVersion raises the IDE language
+             level for those shared files and lets the IDE migrate them to C# 9-14 syntax (new(),
+             collection expressions) that the plugin build cannot compile. -->
+        <LangVersion>7.3</LangVersion>
+        <AssemblyName>SpaTests</AssemblyName>
+        <RootNamespace>SettlementPlacementAdvisor</RootNamespace>
+        <IsPackable>false</IsPackable>
+        <Nullable>disable</Nullable>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+        <NoWarn>NU1701;CS0618;MSB3277;SYSLIB0050</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="*.cs"/>
+        <Compile Include="../gameapi/**/*.cs"/>
+        <Compile Include="../pipeline/**/*.cs"/>
+        <Compile Include="../presentation/**/*.cs"/>
+        <Compile Include="../logger/**/*.cs"/>
+        <!-- Plugin.cs is the Unity entry: compiled here so its load failure line is pinned, and never
+             instantiated - Awake reads Unity's Logger and kills the process, so the load gate itself
+             stays the manual in-game smoke check. The composition hand-off it fills in-game (SpaRuntime)
+             is filled by the test fixtures instead. -->
+        <Compile Include="../composition/*.cs"/>
+        <!-- The build-time version reader, compiled here so GameBuildReaderTests pins its decode
+             contract. Only the reader: Program.cs is the reader's command-line face, and its Main
+             would clash with the test SDK's generated entry point. -->
+        <Compile Include="../tools/GameBuild/GameBuildReader.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="xunit" Version="2.9.2"/>
+        <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7"/>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1"/>
+        <!-- BepInEx's shipped 0Harmony (2.9, also inside the GameLibs package) self-destructs in
+             AccessTools' static initializer on .NET 10; patching needs upstream Lib.Harmony.
+             2.3.3 is not enough: its net8 asset takes the MonoMod Cecil IL path, which cannot declare
+             locals on coreclr. 2.4.2 ships the net10.0 asset. -->
+        <PackageReference Include="Lib.Harmony" Version="2.4.2"/>
+        <!-- In-proc Roslyn: GameBuildReaderDecodeTests emits the synthetic game assemblies that
+             carry the Version-attribute shapes the real assemblies cannot show. Test-only; the
+             plugin build never sees it. MetadataLoadContext is the reader's own dependency: this
+             project compiles the reader to pin its decode contract. -->
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0"/>
+        <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0"/>
+        <!-- Game assemblies with runtime assets: the test host executes the real game types.
+             Feed mode only; local mode takes the install HintPath references from
+             Directory.Build.props instead (the current pin is not in the local NuGet cache). -->
+        <PackageReference Include="Humankind.GameLibs" Version="[$(GameLibsPin)]"
+                          Condition="'$(LocalGameLibs)' != 'true'"/>
+    </ItemGroup>
+
+    <!-- The GameLibs package ships the same 0Harmony.dll, and NuGet's package-file conflict pass
+         (last step of ResolveAssemblyReferences) keeps the GameLibs copy and drops Lib.Harmony's.
+         Drop every 0Harmony reference - the install's fork in local mode, the package copy in feed
+         mode - from the sets that feed the compile, the output directory, and deps.json, and
+         re-include Lib.Harmony's in its place. A remove-only filter leaves zero Harmony references.
+         Reference Filename is assigned by the RAR task (which runs after the conflict pass) and
+         NuGetPackageId is missing on raw install references, so Reference removals batch on
+         FullPath, defined at evaluation for every file item. Comparing a FullPath needs the string
+         intrinsic: `%(Reference.FullPath.Contains('x'))` reads a metadata name that never exists,
+         so the condition is false and the removal is a silent no-op. -->
+    <Target Name="UseNuGetHarmony" AfterTargets="_HandlePackageFileConflicts">
+        <ItemGroup>
+            <_NuGetHarmonyCompile Include="@(ResolvedCompileFileDefinitions)" Condition="'%(ResolvedCompileFileDefinitions.Filename)' == '0Harmony' AND '%(ResolvedCompileFileDefinitions.NuGetPackageId)' == 'Lib.Harmony'"/>
+            <_NuGetHarmonyRuntime Include="@(RuntimeCopyLocalItems)" Condition="'%(RuntimeCopyLocalItems.Filename)' == '0Harmony' AND '%(RuntimeCopyLocalItems.NuGetPackageId)' == 'Lib.Harmony'"/>
+            <Reference Remove="@(Reference)" Condition="'%(Reference.FullPath)' == '$(GameDir)/BepInEx/core/0Harmony.dll'"/>
+            <Reference Remove="@(Reference)" Condition="$([System.String]::Copy('%(Reference.FullPath)').Contains('humankind.gamelibs')) AND $([System.String]::Copy('%(Reference.FullPath)').EndsWith('0Harmony.dll'))"/>
+            <Reference Include="@(_NuGetHarmonyCompile)"/>
+            <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Filename)' == '0Harmony' AND '%(ReferenceCopyLocalPaths.NuGetPackageId)' == 'Humankind.GameLibs'"/>
+            <ReferenceCopyLocalPaths Include="@(_NuGetHarmonyRuntime)"/>
+            <ResolvedCompileFileDefinitions Remove="@(ResolvedCompileFileDefinitions)" Condition="'%(ResolvedCompileFileDefinitions.Filename)' == '0Harmony' AND '%(ResolvedCompileFileDefinitions.NuGetPackageId)' == 'Humankind.GameLibs'"/>
+            <RuntimeCopyLocalItems Remove="@(RuntimeCopyLocalItems)" Condition="'%(RuntimeCopyLocalItems.Filename)' == '0Harmony' AND '%(RuntimeCopyLocalItems.NuGetPackageId)' == 'Humankind.GameLibs'"/>
+        </ItemGroup>
+    </Target>
+
+    <!-- Rider's unit test runner starts SpaTests with dotnet exec and its deps.json, and dies
+         with 'The specified deps.json ... does not exist' when the file is missing. Rider 2026.2
+         builds with the target list ...;ResolveReferences;Compile;CoreCompile;... (no Build): the
+         SDK generators, hooked on CopyFilesToOutputDirectory, never run, and Rider's output sync
+         prunes bin files its build did not report, so a plain write to bin is deleted again.
+         Replicate the two generator tasks, hook them before _CopyFilesMarkedCopyLocal (runs in
+         the design-time chain) and CoreCompile (full builds), and add the generated files to
+         ReferenceCopyLocalPaths so the copy-local pass reports and keeps them. Writing the same
+         files the SDK writes in a full Build is idempotent. -->
+    <Target Name="EnsureRunConfigFiles"
+            DependsOnTargets="_DefaultMicrosoftNETPlatformLibrary;
+                            _HandlePackageFileConflicts;
+                            _ComputeReferenceAssemblies;
+                            _ComputeUserRuntimeAssemblies;
+                            ResolveRuntimePackAssets;
+                            _ComputePackageReferencePublish;
+                            _GenerateRuntimeConfigurationFilesInputCache"
+            BeforeTargets="_CopyFilesMarkedCopyLocal;CoreCompile"
+            Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp'">
+        <GenerateDepsFile
+            ProjectPath="$(MSBuildProjectFullPath)"
+            AssetsFilePath="$(ProjectAssetsFile)"
+            DepsFilePath="$(ProjectDepsFilePath)"
+            TargetFramework="$(TargetFramework)"
+            AssemblyName="$(AssemblyName)"
+            AssemblyExtension="$(TargetExt)"
+            AssemblyVersion="$(Version)"
+            AssemblySatelliteAssemblies="@(IntermediateSatelliteAssembliesWithTargetPath)"
+            ReferencePaths="@(ReferencePath)"
+            ReferenceDependencyPaths="@(ReferenceDependencyPaths)"
+            ReferenceSatellitePaths="@(ReferenceSatellitePaths)"
+            ReferenceAssemblies="@(_ReferenceAssemblies)"
+            RuntimePackAssets="@(RuntimePackAsset)"
+            IncludeMainProject="$(IncludeMainProjectInDepsFile)"
+            TrimDepsJsonLibrariesWithoutAssets="$(TrimDepsJsonLibrariesWithoutAssets)"
+            RuntimeIdentifier="$(RuntimeIdentifier)"
+            PlatformLibraryName="$(MicrosoftNETPlatformLibrary)"
+            RuntimeFrameworks="@(RuntimeFramework)"
+            CompilerOptions="@(DependencyFileCompilerOptions)"
+            CompileReferences="@(ResolvedCompileFileDefinitions)"
+            ResolvedNuGetFiles="@(NativeCopyLocalItems);@(ResourceCopyLocalItems);@(RuntimeCopyLocalItems)"
+            UserRuntimeAssemblies="@(UserRuntimeAssembly)"
+            ResolvedRuntimeTargetsFiles="@(RuntimeTargetsCopyLocalItems)"
+            IsSelfContained="$(SelfContained)"
+            IncludeRuntimeFileVersions="$(IncludeFileVersionsInDependencyFile)"
+            RuntimeGraphPath="$(RuntimeIdentifierGraphPath)"/>
+        <PropertyGroup>
+            <_WriteIncludedFrameworks Condition="'$(SelfContained)' == 'true' and '$(_TargetFrameworkVersionWithoutV)' &gt;= '3.1'">true</_WriteIncludedFrameworks>
+        </PropertyGroup>
+        <GenerateRuntimeConfigurationFiles
+            AssetsFilePath="$(ProjectAssetsFile)"
+            TargetFramework="$(TargetFramework)"
+            TargetFrameworkMoniker="$(TargetFrameworkMoniker)"
+            RuntimeConfigPath="$(ProjectRuntimeConfigFilePath)"
+            RuntimeConfigDevPath="$(ProjectRuntimeConfigDevFilePath)"
+            RuntimeIdentifier="$(RuntimeIdentifier)"
+            PlatformLibraryName="$(MicrosoftNETPlatformLibrary)"
+            RuntimeFrameworks="@(RuntimeFramework)"
+            RollForward="$(RollForward)"
+            UserRuntimeConfig="$(UserRuntimeConfig)"
+            HostConfigurationOptions="@(RuntimeHostConfigurationOption)"
+            AdditionalProbingPaths="@(AdditionalProbingPath)"
+            IsSelfContained="$(SelfContained)"
+            WriteIncludedFrameworks="$(_WriteIncludedFrameworks)"
+            GenerateRuntimeConfigDevFile="$(GenerateRuntimeConfigDevFile)"
+            AlwaysIncludeCoreFramework="$(AlwaysIncludeCoreFrameworkInRuntimeConfig)"/>
+        <ItemGroup>
+            <FileWrites Include="$(ProjectDepsFilePath)" Condition="Exists('$(ProjectDepsFilePath)')"/>
+            <FileWrites Include="$(ProjectRuntimeConfigFilePath)" Condition="Exists('$(ProjectRuntimeConfigFilePath)')"/>
+            <FileWrites Include="$(ProjectRuntimeConfigDevFilePath)" Condition="Exists('$(ProjectRuntimeConfigDevFilePath)')"/>
+            <ReferenceCopyLocalPaths Include="$(ProjectDepsFilePath)" Condition="Exists('$(ProjectDepsFilePath)')">
+                <TargetPath>$([System.IO.Path]::GetFileName($(ProjectDepsFilePath)))</TargetPath>
+            </ReferenceCopyLocalPaths>
+            <ReferenceCopyLocalPaths Include="$(ProjectRuntimeConfigFilePath)" Condition="Exists('$(ProjectRuntimeConfigFilePath)')">
+                <TargetPath>$([System.IO.Path]::GetFileName($(ProjectRuntimeConfigFilePath)))</TargetPath>
+            </ReferenceCopyLocalPaths>
+        </ItemGroup>
+    </Target>
+
+</Project>

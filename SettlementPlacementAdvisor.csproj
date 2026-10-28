@@ -1,94 +1,174 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Settlement placement advisor. Build: scripts/build-advisor.sh. Rules: README.md.
-       Module vocabulary: GLOSSARY.md. -->
-  <PropertyGroup>
-    <TargetFramework>net472</TargetFramework>
-    <LangVersion>7.3</LangVersion>
-    <AssemblyName>SettlementPlacementAdvisor</AssemblyName>
-    <RootNamespace>SettlementPlacementAdvisor</RootNamespace>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <Nullable>disable</Nullable>
-    <DebugType>none</DebugType>
-    <!-- MinVer stamps the version from git tags. MinVerMinimumMajorMinor is the untagged
-         fallback (the default 0.0 makes untagged builds compute 0.0.0-alpha.0.<n>, a form
-         BepInEx 5 cannot parse, which silently skips the whole plugin; see the
-         GenerateModVersion guard below). The game ships its own copies of the referenced
-         assemblies, so references stay out of the output. CS0436 stays enabled: it is the loud
-         signal for decompiled game sources leaking into this compile. -->
-    <MinVerMinimumMajorMinor>1.0</MinVerMinimumMajorMinor>
-    <NoWarn>CS0618</NoWarn>
-  </PropertyGroup>
-
-  <!-- Harness sources live under scripts/ (own projects) and the decompiled game cache under
-       reference/ (gitignored): keep both out of this project's default item globs. -->
-  <ItemGroup>
-    <Compile Remove="scripts/**/*.cs" />
-    <Compile Remove="reference/**/*.cs" />
-    <None Remove="reference/**" />
-  </ItemGroup>
-
-  <!-- Game install path, resolved per machine: -p:GameDir=... wins, then GAME_DIR (the same
-       knob scripts/launch-game.sh reads), then the standard Steam Linux install. -->
-  <PropertyGroup>
-    <!-- GetEnvironmentVariable, not $(Env:GAME_DIR): the SDK's MSBuild returns an empty
-         string for Env:, which silently falls through to the default. -->
-    <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetEnvironmentVariable('GAME_DIR'))</GameDir>
-    <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetFolderPath(SpecialFolder.UserProfile))/.local/share/Steam/steamapps/common/Humankind</GameDir>
-    <BepInExPluginsDir>$(GameDir)/BepInEx/plugins</BepInExPluginsDir>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
-    <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" />
-    <!-- Compile-time game + BepInEx assemblies from the private GameLibs feed
-         (nuget.config; CONTRIBUTING.md). Version = game build; runtime assets excluded
-         because the game ships its own copies. -->
-    <PackageReference Include="Humankind.GameLibs" Version="[1.0.31.4851-r2]" PrivateAssets="all" ExcludeAssets="runtime" />
-  </ItemGroup>
-
-
-  <!-- Deploy only when the install exists; the skip is loud so a missing game never looks
-       like a successful deploy. -->
-  <Target Name="CopyToPlugins" AfterTargets="Build">
-    <Message Importance="high" Condition="!Exists('$(GameDir)')"
-             Text="GameDir '$(GameDir)' not found: $(TargetFileName) NOT deployed (pass -p:GameDir=... or export GAME_DIR)" />
-    <MakeDir Condition="Exists('$(GameDir)')" Directories="$(BepInExPluginsDir)" />
-    <Copy Condition="Exists('$(GameDir)')" SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPluginsDir)" />
-    <Message Importance="high" Condition="Exists('$(GameDir)')" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)" />
-  </Target>
-
-  <!-- MinVer's computed version becomes the compile-time constant consumed by the
-       BepInPlugin attribute, keeping git tags the single source.
-       BepInEx 5 parses that attribute string with new System.Version(...): only dot-separated
-       numbers parse, so a pre-release ("1.0.0-alpha.0.3") or build-metadata ("+g1234abc")
-       suffix makes the version null and BepInEx SKIPS THE WHOLE PLUGIN: "Skipping type
-       [SettlementPlacementAdvisor.Plugin] because its version is invalid", no patches, no
-       advisor. Therefore: sanitize to the numeric core (strip "+metadata", then "-prerelease")
-       and guard the build so no unparseable stamp can ever ship. -->
-  <Target Name="GenerateModVersion" BeforeTargets="CoreCompile">
+    <!-- Settlement placement advisor. Build: scripts/build-advisor.sh.
+         Module vocabulary: GLOSSARY.md. -->
     <PropertyGroup>
-      <_ModVersionCore>$([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '\\+.*$', ''))</_ModVersionCore>
-      <_ModVersionCore>$([System.Text.RegularExpressions.Regex]::Replace('$(_ModVersionCore)', '-.*$', ''))</_ModVersionCore>
-      <!-- Major >= 1 and three numeric segments: what the BepInPlugin constructor's
-           new System.Version(string) accepts (BepInEx 5 loads 0.x if the core parses, so a
-           positive major is also required; MinVer's untagged default 0.0.0 must never ship).
-           MSBuild statics have no out parameters, so the guard replicates the parser. -->
-      <_ModVersionParsable>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_ModVersionCore)', '^([1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'))</_ModVersionParsable>
+        <TargetFramework>net472</TargetFramework>
+        <LangVersion>7.3</LangVersion>
+        <AssemblyName>SettlementPlacementAdvisor</AssemblyName>
+        <RootNamespace>SettlementPlacementAdvisor</RootNamespace>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <Nullable>disable</Nullable>
+        <DebugType>none</DebugType>
+        <!-- MinVer stamps the version from git tags. MinVerMinimumMajorMinor is the untagged
+             fallback (the default 0.0 makes untagged builds compute 0.0.0-alpha.0.<n>, a form
+             BepInEx 5 cannot parse, which silently skips the whole plugin; see the
+             GenerateModVersion guard below). The game ships its own copies of the referenced
+             assemblies, so references stay out of the output. CS0436 stays enabled: it is the loud
+             signal for decompiled game sources leaking into this compile. -->
+        <MinVerMinimumMajorMinor>1.0</MinVerMinimumMajorMinor>
+        <!-- The game-libs pin lives in Directory.Build.props: one restore bracket for the plugin, the
+             tests and tools/cfggen. GenerateModVersion stamps GameBuild.Supported from the Version
+             attribute of the Assembly-CSharp.dll the compile is given, never from this label, and
+             tools/cfggen reads the same attribute from the copy it writes the cfg with. -->
+        <NoWarn>CS0618</NoWarn>
     </PropertyGroup>
-    <Error Condition="'$(_ModVersionParsable)' != 'True'"
-           Text="BepInPlugin version '$(Version)' sanitizes to '$(_ModVersionCore)': BepInEx 5 needs a numeric major>=1.minor.build core (untagged builds need MinVerMinimumMajorMinor >= 1.0)." />
-    <Message Importance="high" Text="ModVersion for BepInPlugin: $(_ModVersionCore) (MinVer '$(Version)')" />
-    <PropertyGroup>
-      <_ModVersionSource>internal static class ModVersion
-{
-    public const string Value = "$(_ModVersionCore)"%3B
-}</_ModVersionSource>
-    </PropertyGroup>
-    <WriteLinesToFile File="$(IntermediateOutputPath)modversion.g.cs" Lines="$(_ModVersionSource)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+
+
+    <!-- Non-plugin sources: scripts/ (shell entry points and the commit hook), tests/ (their own
+         project compiles these sources itself), tools/ (GameBuild, the version reader this target
+         runs, and CfgGen, the release cfg writer), and the gitignored decompiled cache under
+         reference/. Keep them out of the default item globs. -->
     <ItemGroup>
-      <Compile Include="$(IntermediateOutputPath)modversion.g.cs" />
+        <Compile Remove="scripts/**/*.cs"/>
+        <Compile Remove="tests/**/*.cs"/>
+        <Compile Remove="tools/**/*.cs"/>
+        <Compile Remove="reference/**/*.cs"/>
     </ItemGroup>
-  </Target>
+
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all"/>
+        <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all"/>
+        <!-- Compile-time game + BepInEx assemblies from the private GameLibs feed (nuget.config).
+             Version = game build label; runtime assets excluded
+             because the game ships its own copies. Without GAMELIBS_PAT the root
+             Directory.Build.props switches to LocalGameLibs (references into $(GameDir)) and this
+             package is not restored at all. -->
+        <PackageReference Include="Humankind.GameLibs" Version="[$(GameLibsPin)]" PrivateAssets="all"
+                          ExcludeAssets="runtime" Condition="'$(LocalGameLibs)' != 'true'"/>
+    </ItemGroup>
+
+    <!-- LocalGameLibs references are compile-time only, the counterpart of the runtime-asset
+         exclusion above: the game ships its own copies, so nothing from the install lands in the
+         output next to the mod DLL. -->
+    <ItemGroup Condition="'$(LocalGameLibs)' == 'true'">
+        <Reference Update="@(Reference)" Private="false"/>
+    </ItemGroup>
+
+
+    <!-- Deploy only when the install exists; the skip is loud so a missing game never looks
+         like a successful deploy. -->
+    <Target Name="CopyToPlugins" AfterTargets="Build">
+        <Message Importance="high" Condition="!Exists('$(GameDir)')"
+                 Text="GameDir '$(GameDir)' not found: $(TargetFileName) NOT deployed (pass -p:GameDir=... or export GAME_DIR)"/>
+        <MakeDir Condition="Exists('$(GameDir)')" Directories="$(BepInExPluginsDir)"/>
+        <Copy Condition="Exists('$(GameDir)')" SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPluginsDir)"/>
+        <Message Importance="high" Condition="Exists('$(GameDir)')" Text="Copied $(TargetFileName) -> $(BepInExPluginsDir)"/>
+    </Target>
+
+    <!-- MinVer's computed version becomes the compile-time constant consumed by the
+         BepInPlugin attribute, keeping git tags the single source.
+         BepInEx 5 parses that attribute string with new System.Version(...): only dot-separated
+         numbers parse, so a pre-release ("1.0.0-alpha.0.3") or build-metadata ("+g1234abc")
+         suffix makes the version null and BepInEx SKIPS THE WHOLE PLUGIN: "Skipping type
+         [SettlementPlacementAdvisor.Plugin] because its version is invalid", no patches, no
+         advisor. Therefore: sanitize to the numeric core (strip "+metadata", then "-prerelease")
+         and guard the build so no unparseable stamp can ever ship. -->
+    <Target Name="GenerateModVersion" BeforeTargets="CoreCompile">
+        <PropertyGroup>
+            <_ModVersionCore>$([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '\\+.*$', ''))</_ModVersionCore>
+            <_ModVersionCore>$([System.Text.RegularExpressions.Regex]::Replace('$(_ModVersionCore)', '-.*$', ''))</_ModVersionCore>
+            <!-- Major >= 1 and three numeric segments: what the BepInPlugin constructor's
+                 new System.Version(string) accepts (BepInEx 5 loads 0.x if the core parses, so a
+                 positive major is also required; MinVer's untagged default 0.0.0 must never ship).
+                 MSBuild statics have no out parameters, so the guard replicates the parser. -->
+            <_ModVersionParsable>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_ModVersionCore)', '^([1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'))</_ModVersionParsable>
+        </PropertyGroup>
+        <Error Condition="'$(_ModVersionParsable)' != 'True'"
+               Text="BepInPlugin version '$(Version)' sanitizes to '$(_ModVersionCore)': BepInEx 5 needs a numeric major>=1.minor.build core (untagged builds need MinVerMinimumMajorMinor >= 1.0)."/>
+        <Message Importance="high" Text="ModVersion for BepInPlugin: $(_ModVersionCore) (MinVer '$(Version)')"/>
+        <PropertyGroup>
+            <_ModVersionSource>internal static class ModVersion
+                {
+                public const string Value = "$(_ModVersionCore)"%3B
+                }
+            </_ModVersionSource>
+        </PropertyGroup>
+        <WriteLinesToFile File="$(IntermediateOutputPath)modversion.g.cs" Lines="$(_ModVersionSource)" Overwrite="true" WriteOnlyWhenDifferent="true"/>
+        <ItemGroup>
+            <Compile Include="$(IntermediateOutputPath)modversion.g.cs"/>
+        </ItemGroup>
+        <!-- The game build this mod was compiled for, read from the assembly the compile is given.
+             %(ReferencePath) names the Assembly-CSharp.dll the compiler consumes: the package copy in
+             feed mode, the install copy in local mode. Its assembly-level Version attribute is the
+             number the game reads at runtime (Amplitude.Framework.Application
+             LoadVersionFromAssemblyAttribute) and the number GameApi.GameBuild prints in a load
+             failure line, so stamp and report are one fact. tools/GameBuild decodes that attribute
+             through CustomAttributeData: the values are read without instantiating the attribute, and
+             the siblings its type needs sit beside the assembly in both modes. BuildGameBuildTool
+             builds the reader in-process and incrementally; the read runs on DOTNET_HOST_PATH when
+             the CLI provided one, so the target does not depend on the shell PATH.
+             Package versions and the pin are labels, never the stamp. A feed label can drift from the
+             build inside the package (a repack, a mislabeled publish, a stale restore), so a label
+             that disagrees with the assembly warns and names both, and the stamp follows the assembly. -->
+        <CreateProperty Value="%(ReferencePath.FullPath)" Condition="'%(ReferencePath.Filename)' == 'Assembly-CSharp'">
+            <Output TaskParameter="Value" PropertyName="_GameBuildAssembly"/>
+        </CreateProperty>
+        <CreateProperty Value="%(ReferencePath.NuGetPackageVersion)" Condition="'%(ReferencePath.NuGetPackageId)' == 'Humankind.GameLibs'">
+            <Output TaskParameter="Value" PropertyName="_GameLibsResolved"/>
+        </CreateProperty>
+        <Error Condition="'$(_GameBuildAssembly)' == ''"
+               Text="No Assembly-CSharp row in the resolved references: no game assembly to read the supported game build from."/>
+        <PropertyGroup>
+            <_GameLibsResolvedCore>$([System.Text.RegularExpressions.Regex]::Replace('$(_GameLibsResolved)', '-.*$', ''))</_GameLibsResolvedCore>
+            <_GameLibsPinCore>$([System.Text.RegularExpressions.Regex]::Replace('$(GameLibsPin)', '-.*$', ''))</_GameLibsPinCore>
+            <_GameBuildToolDll>$(MSBuildThisFileDirectory)tools/GameBuild/bin/Release/net10.0/GameBuild.dll</_GameBuildToolDll>
+            <_DotNetHost>$([System.Environment]::GetEnvironmentVariable('DOTNET_HOST_PATH'))</_DotNetHost>
+            <_DotNetHost Condition="'$(_DotNetHost)' == ''">dotnet</_DotNetHost>
+        </PropertyGroup>
+        <Exec IgnoreExitCode="true" ConsoleToMsBuild="true"
+              Command="&quot;$(_DotNetHost)&quot; &quot;$(_GameBuildToolDll)&quot; &quot;$(_GameBuildAssembly)&quot;"
+              StandardOutputImportance="low" StandardErrorImportance="low">
+            <Output TaskParameter="ConsoleOutput" PropertyName="_GameBuildRead"/>
+            <Output TaskParameter="ExitCode" PropertyName="_GameBuildExit"/>
+        </Exec>
+        <PropertyGroup>
+            <_GameBuildSupported Condition="'$(_GameBuildExit)' == '0'">$(_GameBuildRead.Trim())</_GameBuildSupported>
+            <_GameBuildFailure Condition="'$(_GameBuildExit)' != '0'">exit $(_GameBuildExit): $(_GameBuildRead)</_GameBuildFailure>
+        </PropertyGroup>
+        <Error Condition="'$(_GameBuildSupported)' == ''"
+               Text="The supported game build is read from $(_GameBuildAssembly), and the read failed: $(_GameBuildFailure)."/>
+        <Warning Condition="'$(_GameLibsResolvedCore)' != '' AND '$(_GameLibsResolvedCore)' != '$(_GameBuildSupported)'"
+                 Text="The Humankind.GameLibs package is labeled $(_GameLibsResolved) while its Assembly-CSharp.dll reports $(_GameBuildSupported): the feed label drifted from the build inside. The stamp follows the assembly; republish under the build it carries."/>
+        <Warning Condition="'$(LocalGameLibs)' == 'true' AND '$(_GameLibsPinCore)' != '$(_GameBuildSupported)'"
+                 Text="GameLibsPin declares $(GameLibsPin) and the install's Assembly-CSharp.dll reports $(_GameBuildSupported). The stamp follows the assembly; bump the pin with a package that carries this build."/>
+        <Message Importance="high" Text="Supported game build for load failure lines: $(_GameBuildSupported) (read from $(_GameBuildAssembly))"/>
+        <PropertyGroup>
+            <_GameBuildSource>internal static class GameBuild
+{
+    public const string Supported = "$(_GameBuildSupported)"%3B
+}
+            </_GameBuildSource>
+        </PropertyGroup>
+        <WriteLinesToFile File="$(IntermediateOutputPath)gamebuild.g.cs" Lines="$(_GameBuildSource)" Overwrite="true" WriteOnlyWhenDifferent="true"/>
+        <ItemGroup>
+            <Compile Include="$(IntermediateOutputPath)gamebuild.g.cs"/>
+        </ItemGroup>
+    </Target>
+
+    <!-- The reader is built in-process: no second MSBuild process, no PATH dependency, and
+         incremental through Inputs/Outputs, so a build with an unchanged reader skips it entirely.
+         Restore runs in the same call so a clean checkout needs no separate step (an SDK build
+         without project.assets.json fails NETSDK1004). LocalGameLibs=false goes in as a global
+         property, so the tool never resolves the game reference set. The solution marks the tool
+         project build-disabled: this target is its only builder, which is why there is no build
+         race with the solution build. -->
+    <Target Name="BuildGameBuildTool" BeforeTargets="GenerateModVersion"
+            Inputs="$(MSBuildThisFileDirectory)tools/GameBuild/Program.cs;$(MSBuildThisFileDirectory)tools/GameBuild/GameBuildReader.cs;$(MSBuildThisFileDirectory)tools/GameBuild/GameBuild.csproj"
+            Outputs="$(MSBuildThisFileDirectory)tools/GameBuild/bin/Release/net10.0/GameBuild.dll">
+        <MSBuild Projects="$(MSBuildThisFileDirectory)tools/GameBuild/GameBuild.csproj" Targets="Restore;Build"
+                 Properties="Configuration=Release;LocalGameLibs=false"/>
+    </Target>
 
 </Project>

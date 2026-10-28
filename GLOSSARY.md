@@ -1,83 +1,102 @@
 # Glossary
 
-Domain terms for the settlement placement advisor. Architecture vocabulary (module, interface,
-depth, seam, adapter, leverage, locality) lives in the codebase-design skill; this file names
-the domain and the modules at its seams.
+Domain terms for the settlement placement advisor, and the modules at its seams. Architecture vocabulary lives in the
+codebase-design skill.
 
 ## Domain
 
-- **Placement mode**: the settlement action a session is running (`ArmyActionType`):
-  `CreateCamp` for settlement placement, `FoundCity` and `FoundCityWithSettler` for city
-  founding. All three share `CampPlacementEvaluation`, so the advisor's patch sees city
-  sessions too. Contract: settlement placement is the only mode it writes; every other mode is a
-  strict no-op that hands its pin gate back to vanilla. A settlement tail left on the shared
-  evaluation is released on the next city activation (see Tail).
-- **Refresh**: one pass of the placement snapshot sync: vanilla full eval (only at
-  activation / district change) and `UpdateCurrentPosition` (every mouse move). The advisor
-  hooks `UpdateCurrentPosition`, so a refresh means "the cursor position was processed".
-- **Hovered territory**: the territory owning the tile under the placement cursor. Level 1
-  of the range.
-- **Range territories**: territories reachable from the hovered territory in the
-  adjacency range (`RangeLevels`, center counts as 1), stepping over LAND edges only:
-  the game's territory adjacency array also carries sea, cliff, mountain and closed
-  edges, and those never count as a range step. The hovered territory is never a range
-  territory.
-- **Pick**: one recommended tile: tile index, weighted FIMS score, and the evaluated
-  placement data the FIMS pins read.
-- **Cursor context**: the pick computation's full input for one refresh: hovered
-  territory, placing army and empire, and the advised counts (clamping lives inside the
-  pick computation, minimum 1). Context in, picks out: a null return means the game
-  facts were unavailable and the advisor deactivates.
-- **Pick set**: the published, immutable result of one pick computation: version, tiles
-  (ascending, unique), tile membership, and the entering/leaving diff against the previous
-  pick set. The only channel from the simulation thread to the presentation thread.
-- **Publish**: swap a new pick set into the volatile channel. Only a pick-content change
-  publishes; identical content bumps no version. An INACTIVE publish is the advisor's
-  deactivation: stars stop and the FIMS pin gate returns to vanilla. It is the only thing
-  the advisor does on a placement mode it does not own, and on a zero-pick result: an ACTIVE
-  empty set would suppress vanilla's pins without replacing them, so nothing-to-advise
-  publishes inactive.
-- **Tail**: the fixed slot window in `CampPlacementEvaluation.ValidTiles` owned by the
-  evaluation writer. The base slot is the cursor slot, vanilla's append point after a
-  full-eval `Initialize` (`UpdateCurrentPosition` appends the cursor entry at the baseline
-  count); slots above it hold picks, rewritten in place at invariant indices every refresh.
-  Vanilla entries are never moved and its appends land above the tail. Because vanilla binds
-  pins to array indices, stable slots keep every retained pick bound; only the cursor tile's
-  element changes within one pick set. Vanilla scores the array's whole length, not the valid
-  count, so a tail left by a mode switch must be scrubbed, not just counted down.
+- **Placement mode**: the settlement action a session is running: `CreateCamp`, `FoundCity` or
+  `FoundCityWithSettler`.
+- **Takeover point**: `SettlementPlacementCursorSnapshot.EvaluatePlacement`, the snapshot sync the advisor answers for a
+  wired mode.
+- **Mode-policy table** (`ModePolicy`): a mode's row in one place - territory claimability, district definition, tile
+  gate and army gates, each gate naming a `BindingShape` the startup probe can bind. A mode is wired when its row
+  exists. The single source of mode dispatch.
+- **Scan pass**: the advisor's full evaluation of the placement neighborhood for one cursor position.
+- **Refresh**: one per-cursor update of the placement snapshot - its scan pass, cursor slot write and publish.
+- **Hovered territory**: the territory owning the tile under the placement cursor.
+- **Pick**: one recommended tile - tile index, weighted FIMS score, and the evaluated placement data the pins read.
+- **Cursor context**: the pick computation's whole input for one refresh: hovered territory, placing army and empire,
+  the advised counts, the neighborhood range, and the mode.
+- **Pick set**: the immutable result of one pick computation - the published ascending unique tiles the pin gate answers
+  membership on.
+- **Presentation view** (`PresentationView.Current`): the advisor's only cross-thread channel - one snapshot of a pick
+  set, its mode, and the cursor slot's gate answer with the tile it scored.
+- **Inactive**: the advisor's off state - a presentation view with no pick set.
+- **Publish**: the swap of one presentation view into that channel.
+- **Tail**: the entry window the evaluation writer owns in the active mode evaluation's
+  `CampPlacementEvaluation.ValidTiles`; the **cursor slot** is its first entry.
+- **Placement neighborhood**: the territories a scan covers: the hovered territory, counted as level 1, plus
+  `RangeLevels` - 1 hops over every adjacency edge, sea, cliff, mountain and closed-border edges included.
+- **Claimable territory**: a neighborhood territory that passes the mode row's territory claimability.
+- **Tile pre-filter**: the per-tile checks run on every tile of a claimable territory before the mode's gate is asked:
+  water, exploration, terrain and settlement capability.
+- **Tile gate**: the mode's own placement validity call for one tile. The game surface answers it unmasked as a **gate
+  answer**: failure flags, plus money/influence/unit costs on the camp gate; the city and settler gates report flags
+  only.
+- **Resource-tile exclusion**: the drop of a gate-passed tile whose point of interest is a resource deposit
+  (`IsTileResourceTile`); a lookup failure counts as a resource tile, so the tile is dropped.
+- **Membership mask**: the pick computation's mask over the gate answer that drops money and influence failures, so an
+  unaffordable tile stays admissible.
+- **Army-level gate**: the army-side gates named by the mode's row - vanilla's shared army-state row first, then the
+  mode's own - asked once per scan pass.
+- **Admission set**: one territory's recommended tiles - its quota plus the full top tie set.
+- **Top tie set**: every tile tied with the last admitted score of a territory's admission.
+- **Ranked survivors**: one territory's tiles that passed the pre-filter, the membership mask, the resource-tile
+  exclusion and the game's own evaluation, sorted score-descending then tile-ascending. The pick computation's cache
+  unit and the admission's input; the quota applies only when a role (hovered or neighbour) slices them.
+- **Shown set**: the published pick set - the tiles vanilla's overlay and pins show.
+- **White hex**: vanilla's own advised-tile overlay - its tile-feedback rendering of the shown tiles, driven by the
+  writer's `Showable` entries. The advisor renders nothing itself. _Avoid_: `Recommanded`, the game's own recommendation
+  flag.
+- **Cursor slot**: the tail's first entry, written on every refresh: the scored entry for the hovered tile, carrying
+  vanilla's hovered glyph when the hovered rule admits it - vanilla's kind switch recolors it when the hovered tile
+  is also a shown tile.
+- **Glyph**: the marker an evaluation entry carries, its `Showable` flag.
+- **Hovered rule** (`HoveredRule`): vanilla's rule for the tile under the cursor - the pin and the glyph show unless
+  its gate answer reports a failure other than insufficient influence. The tile under the cursor renders on this
+  rule, never on shown-set membership.
 
 ## Modules
 
-- **Pick computation** (`PickComputation`): the rules. Cursor context + game surface in,
-  ordered unique picks out (null = game facts unavailable). Owns the per-territory frame
-  cache (frames read from the game surface at compute time, never threaded by callers),
-  the evaluation budget, count clamping, ranking, and truncation. No side effects.
-- **Game surface** (`GameSurface`): the seam over the game's internals: tile
-  settlement capability, per-tile water, exploration, per-tile placement evaluation, frame
-  counters, army lookup, and the territory graph (territory of a tile, claimed flag,
-  settlement-site tiles, land adjacencies). The adapter (`GameApi`) satisfies it in the game:
-  reflection for the simulation internals, the public AI snapshot for the territory graph (its
-  land filter keeps the `Open` transition edges). Water is a per-tile fact: sea-flagged
-  territories can host valid camp sites, so the advisor never filters by the territory ocean
-  flag. Territory facts fail closed: an unknown territory never advises.
-- **Evaluation writer** (`EvaluationWriter`): puts picks into the game's placement
-  evaluation. Writes pick slots in place, barriers, then raises `ValidTileCount`; owns
-  `CurrentPositionIndex` when the cursor tile is a pick. Reserves tail capacity at
-  activation and suppresses vanilla glyphs. Settlement placement writes only: the mutating entry
-  point guards on `SettleType`, and city activation only releases the advisor's own slots.
-- **Star renderer** (`StarRenderer`): the advisor's own recommended-tile stars. One entry
-  point, takes a pick set; owns the rendered version, the fx handles per tile, and the
-  lazy snapshot subscription. Animates entering and leaving tiles only.
-- **Pick canvas** (`PickCanvas`): the presentation-side effect interface the star renderer
-  drives (start fx on a tile, stop fx). The Unity feedback controller adapter satisfies it.
+- **Pick computation** (`PickComputation`): the rules in pipeline order, from the army-level gate to admission, with the
+  per-territory cache.
+- **Game surface** (`GameSurface`): the seam over the game's internals the rules read - tile, exploration, evaluation,
+  army and territory-graph facts; the patch binding, the snapshot cursor facts and the evaluation activation answer on
+  the same seam. `GameApi` satisfies it.
+- **Script surface** (`ScriptSurface`): the scripted `GameSurface` of the T1 tests - every answer scripted, each
+  with an answer for the unanswered case; its call counters make cache serving and the reach of a scan observable.
+- **Evaluation writer** (`EvaluationWriter`): puts picks into the running mode's evaluation, and owns that evaluation's
+  tail.
+- **Load gate** (`Plugin.Awake`): the composition root's load decision, taken before any advisor wiring. It writes
+  the one Fatal line and closes the game. It carries no state: a surface that exists is a surface that resolved.
+- **Binding pass** (`BindingPass`): the startup resolution of every reflected game member, row by row, each row
+  declared with a **binding shape** (`BindingShape`): the argument form the pass binds and, for hot members,
+  compiles. It stops at its **first** unresolved row: one drift, one report. A surface built by a returned pass has
+  every row bound, so the game surface never re-checks a binding.
+- **Game-build drift** (`GameBuildDriftException`): the binding pass stopping on a row the running game build does not
+  expose - the game moved a member this mod was compiled against.
+- **Supported game build** (`GameBuild.Supported`): the game build the mod was compiled for, stamped by
+  the **version reader** from the `Assembly-CSharp.dll` the compiler is given. `GameApi.GameBuild` reports
+  the same kind of attribute at runtime, so a load failure line names a matched pair of measurements.
+- **Version reader** (`GameBuildReader`): the build-time decode of the game's assembly-level `Version`
+  attribute, read through metadata so no assembly is loaded and no game code runs. The plugin build
+  stamps with it, `tools/CfgGen` reports the game build it wrote a cfg with, and Humankind-GameLibs'
+  derive tool reads the same attribute the same way: one decode, three callers, one number.
+- **Running game build** (`GameApi.GameBuild`): the game build the player is on, as the game itself states it. Named
+  beside the supported one in the load failure line; the pair's equality picks that line's advice (a mod update when
+  the builds differ, an incompatible mod installed beside this one when they match).
+- **Load failure line** (`Plugin.FailureLine`): the one Fatal line a stopping binding pass ends in, written by
+  `Plugin.Awake` before the game closes: the row, the build pair, and the advice the pair's equality picks.
 
-## Thread contract
+## Vanilla names
 
-- Simulation thread: pick computation, evaluation writer, publish. No Unity object access.
-- Presentation thread: star renderer, pick canvas adapter, FIMS pin gate.
-- Crossing: one volatile reference swap to an immutable pick set. Presentation readers
-  capture the set once per pass and never query the live channel twice in one pass.
-- The evaluation array is shared by reference, not copied. The writer's publish order (write
-  slots, barrier, raise count) keeps the ghost, settle action, best-placement cascade and
-  pins coherent. The only index it repoints is `CurrentPositionIndex`, when the cursor tile
-  is a pick.
+What the game calls these surfaces; the anchors for reading the decompiled tree.
+
+- **Pin**: the game's term for its FIMS placement markers - `Pin<T>`, `PlacementPinsSubset`,
+  `PlacementPin`; the gate the mod hooks is `SettlementPlacementPinsSubset.PinMustMeShown`.
+- **Tile feedback**: the game's term for a map-tile marker fx - a `TileFeedback` kind started through
+  `StartFeedback`; the advised-tile overlay is one.
+- **Recommanded**: the game's own recommendation flag (`FimsTier < 3`) and its
+  `NumberOfRecommandedPins` quota.
+- **Showable**: the `DistrictPlacementEvaluation.ValidTile` field the glossary calls a glyph.

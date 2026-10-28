@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!-- RELEASE CONFIG GENERATOR: writes the cfg shipped in releases with the game's own ConfigFile
+         writer, carrying the plugin header, and reports the game build the cfg was written with.
+         The advisor's settings are bound through AdvisorConfig.Bind, so the cfg carries the
+         live defaults and descriptions with no copies.
+         The game build is not hardcoded here: the tool reads it through tools/GameBuild's
+         GameBuildReader from the Assembly-CSharp.dll copy it runs on, the same decoder the plugin
+         build stamps GameBuild.Supported with. release.yml runs it on a tag, so a cfg can never
+         claim a game build its own assemblies do not carry. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>7.3</LangVersion>
+        <Nullable>disable</Nullable>
+        <AssemblyName>CfgGen</AssemblyName>
+        <RootNamespace>CfgGen</RootNamespace>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+        <NoWarn>CS0436;CS1701;CS1702;MSB3277</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Program.cs"/>
+        <Compile Include="..\..\composition\AdvisorConfig.cs"/>
+        <!-- The plugin build's version reader, so the reported game build is the same measurement
+             the plugin stamps as GameBuild.Supported. -->
+        <Compile Include="..\..\tools\GameBuild\GameBuildReader.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- BepInEx's ConfigFile writer and the game assemblies, from the GameLibs feed pinned by
+             $(GameLibsPin), the one label the plugin and the tests restore. Runtime assets are
+             needed: this headless tool writes the cfg with the game's own writer and reads the build
+             off the Assembly-CSharp.dll copy in its own output. Without GAMELIBS_PAT,
+             Directory.Build.props substitutes the $(GameDir) references, copies included. -->
+        <PackageReference Include="Humankind.GameLibs" Version="[$(GameLibsPin)]" Condition="'$(LocalGameLibs)' != 'true'"/>
+        <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0"/>
+    </ItemGroup>
+</Project>

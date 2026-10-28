@@ -1,10 +1,55 @@
 <Project>
-  <!-- Reference resolution: HintPaths only. MSBuild treats @(Content)/@(None) as candidate
-       assemblies, so game-DLL copies in the tree (e.g. scripts/rangecircuit/bin) would
-       silently replace the real game assemblies at compile time. Dropping
-       {CandidateAssemblyFiles} leaves HintPaths, the target-framework directory, and raw file
-       names. Projects under reference/devtools keep MSBuild's defaults. -->
-  <PropertyGroup>
-    <AssemblySearchPaths>{HintPathFromItem};{TargetFrameworkDirectory};{RawFileName}</AssemblySearchPaths>
-  </PropertyGroup>
+    <!-- Reference resolution: HintPaths only. MSBuild treats @(Content)/@(None) as candidate
+         assemblies, so game-DLL copies in the tree (e.g. tools/CfgGen/bin) would
+         silently replace the real game assemblies at compile time. Dropping
+         {CandidateAssemblyFiles} leaves HintPaths, the target-framework directory, and raw file
+         names. Projects under reference/devtools keep MSBuild's defaults. -->
+    <PropertyGroup>
+        <AssemblySearchPaths>{HintPathFromItem};{TargetFrameworkDirectory};{RawFileName}</AssemblySearchPaths>
+    </PropertyGroup>
+
+    <!-- Game install path, resolved per machine: -p:GameDir=... wins, then GAME_DIR, then the
+         standard Steam Linux install. GetEnvironmentVariable, not $(Env:GAME_DIR): the SDK's
+         MSBuild returns an empty string for Env:, which silently falls through to the default. -->
+    <PropertyGroup>
+        <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetEnvironmentVariable('GAME_DIR'))</GameDir>
+        <GameDir Condition="'$(GameDir)' == ''">$([System.Environment]::GetFolderPath(SpecialFolder.UserProfile))/.local/share/Steam/steamapps/common/Humankind</GameDir>
+        <BepInExPluginsDir>$(GameDir)/BepInEx/plugins</BepInExPluginsDir>
+    </PropertyGroup>
+
+    <!-- Compile-time game + BepInEx assemblies, two sources:
+         - the private Humankind.GameLibs package (nuget.config + GAMELIBS_PAT): the default, and
+           what CI and releases build against;
+         - LocalGameLibs=true: the assemblies of a game install, referenced in place under
+           $(GameDir) as HintPaths, nothing copied into the tree (see the note above). It is
+           auto-enabled when GAMELIBS_PAT is unset, so a contributor without feed access builds
+           from their own install with no extra argument.
+         0Harmony20.dll stays out of the reference set: BepInEx's net20 fallback profile
+         duplicates 0Harmony's types and yields CS0433 in every compile. -->
+    <PropertyGroup>
+        <!-- Read into a property first: nested single quotes inside a Condition attribute do not
+             parse (MSBuild4092). -->
+        <GameLibsPat>$([System.Environment]::GetEnvironmentVariable('GAMELIBS_PAT'))</GameLibsPat>
+        <LocalGameLibs Condition="'$(LocalGameLibs)' == '' AND '$(GameLibsPat)' == ''">true</LocalGameLibs>
+    </PropertyGroup>
+
+    <!-- The exact game-libs pin: one restore bracket for the plugin, the tests and tools/CfgGen.
+         No project stamps from it; each one reads the game build off the assemblies it is given. -->
+    <PropertyGroup>
+        <GameLibsPin>1.31.4851.741546</GameLibsPin>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(LocalGameLibs)' == 'true'">
+        <Reference Include="$(GameDir)/Humankind_Data/Managed/*.dll"/>
+        <Reference Include="$(GameDir)/BepInEx/core/*.dll" Exclude="$(GameDir)/BepInEx/core/0Harmony20.dll"/>
+    </ItemGroup>
+
+    <!-- Checked at target time, so a missing install is a loud build failure carrying the fix in
+         its message. Copy-local is each project's call: the plugin csproj marks its local
+         references compile-time only, the headless tools keep the output copies they run from. -->
+    <Target Name="CheckLocalGameLibs" BeforeTargets="ResolveReferences" Condition="'$(LocalGameLibs)' == 'true'">
+        <Error Condition="!Exists('$(GameDir)/Humankind_Data/Managed')"
+               Text="LocalGameLibs needs a game install at '$(GameDir)': Humankind_Data/Managed is missing. Point GAME_DIR (or -p:GameDir=...) at the install, or export GAMELIBS_PAT to build against the Humankind.GameLibs feed."/>
+        <Message Importance="high" Text="LocalGameLibs: compiling against the assemblies in '$(GameDir)' instead of the Humankind.GameLibs feed."/>
+    </Target>
 </Project>

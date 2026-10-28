@@ -11,7 +11,7 @@ grep -v '^#' "$file" | sed 's/[[:space:]]*$//' > "$clean"
 subject=$(awk 'NF{print; exit}' "$clean")
 
 TYPES='feat|fix|refactor|docs|test|build|ci|chore|revert'
-SCOPES='advisor|picks|gameapi|evaluation|stars|harness'
+SCOPES='logger|composition|gameapi|presentation|pipeline|tests|build|docs|repo'
 LIMIT=72
 
 fail() {
@@ -36,6 +36,11 @@ type=$(printf '%s' "$subject" | sed -E 's/^([a-z]+).*/\1/')
 if [ "$type" = fix ]; then
     body=$(awk -v s="$subject" '$0==s{f=1;next} f&&NF{print;exit}' "$clean")
     [ -n "$body" ] || fail "fix requires a body: Cause / Fix / Ruled out / Verification"
+fi
+
+# Attribution trailers: a `Key-Words:` footer line (`BREAKING CHANGE:` has no hyphen, stays legal).
+if grep -Eq '^[A-Za-z]+(-[A-Za-z]+)+:' "$clean"; then
+    fail "attribution trailers are not allowed"
 fi
 
 rm -f "$clean"
