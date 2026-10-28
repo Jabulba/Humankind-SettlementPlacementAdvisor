@@ -32,6 +32,9 @@ jobs:
           set -o pipefail
           bash scripts/gen-cfg.sh "${GITHUB_REF_NAME#v}" | tee dist/cfggen-report.txt
           grep -q '^game build: [0-9]' dist/cfggen-report.txt
+          game_build="$(sed -n 's/^game build: \([0-9][0-9.]*\).*/\1/p' dist/cfggen-report.txt)"
+          test -n "$game_build"
+          echo "GAME_BUILD=$game_build" >> "$GITHUB_ENV"
 
       - name: Package zip
         run: |
@@ -64,8 +67,11 @@ jobs:
           the advisor; without it the game generates the same defaults. The mod loads at game
           start; restart after installing.
           EOF
+          { printf 'Built for HUMANKIND %s.\n\n' "$GAME_BUILD"; cat dist/release-notes.md; } > dist/notes-head.md
+          mv dist/notes-head.md dist/release-notes.md
 
       - uses: softprops/action-gh-release@v2
         with:
+          name: SPA ${{ env.VERSION }}
           body_path: dist/release-notes.md
           files: dist/SettlementPlacementAdvisor-${{ env.VERSION }}.zip
