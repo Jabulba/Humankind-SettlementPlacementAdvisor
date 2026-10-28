@@ -28,6 +28,7 @@ jobs:
 
       - name: Generate config
         run: |
+          mkdir -p dist
           set -o pipefail
           bash scripts/gen-cfg.sh "${GITHUB_REF_NAME#v}" | tee dist/cfggen-report.txt
           grep -q '^game build: [0-9]' dist/cfggen-report.txt
