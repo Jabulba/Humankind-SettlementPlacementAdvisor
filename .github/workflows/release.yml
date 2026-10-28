@@ -27,7 +27,10 @@ jobs:
         run: dotnet test tests -c Release
 
       - name: Generate config
-        run: bash scripts/gen-cfg.sh "${GITHUB_REF_NAME#v}"
+        run: |
+          set -o pipefail
+          bash scripts/gen-cfg.sh "${GITHUB_REF_NAME#v}" | tee dist/cfggen-report.txt
+          grep -q '^game build: [0-9]' dist/cfggen-report.txt
 
       - name: Package zip
         run: |
@@ -37,6 +40,7 @@ jobs:
           cp bin/Release/SettlementPlacementAdvisor.dll LICENSE README.md \
              dist/com.jabulba.settlementplacementadvisor.cfg dist/pkg/
           (cd dist/pkg && zip -q "../SettlementPlacementAdvisor-${ver}.zip" *)
+          test -f "dist/SettlementPlacementAdvisor-${ver}.zip"
 
       - name: Install git-cliff
         run: |
