@@ -17,6 +17,11 @@
              assemblies, so references stay out of the output. CS0436 stays enabled: it is the loud
              signal for decompiled game sources leaking into this compile. -->
         <MinVerMinimumMajorMinor>1.0</MinVerMinimumMajorMinor>
+        <!-- Release tags carry a v (release.yml's tag pattern and cliff.toml's tag_pattern), and
+             MinVer's default empty prefix reads only unprefixed tags: it ignores v1.0.0 as a
+             non-version tag and falls back to the commit-height default. Declaring the prefix makes
+             the tag the version source GenerateModVersion consumes. -->
+        <MinVerTagPrefix>v</MinVerTagPrefix>
         <!-- The game-libs pin lives in Directory.Build.props: one restore bracket for the plugin, the
              tests and tools/cfggen. GenerateModVersion stamps GameBuild.Supported from the Version
              attribute of the Assembly-CSharp.dll the compile is given, never from this label, and
