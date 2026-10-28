@@ -47,12 +47,15 @@ jobs:
         run: |
           curl -fsSL -o /tmp/gc.tgz \
             https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz
-          tar -xzf /tmp/gc.tgz -C /tmp
+          mkdir -p /tmp/gc
+          tar -xzf /tmp/gc.tgz -C /tmp/gc
+          gc="$(find /tmp/gc -type f -name git-cliff -perm -u+x -print -quit)"
+          test -x "$gc"
+          echo "GIT_CLIFF=$gc" >> "$GITHUB_ENV"
 
       - name: Release notes
         run: |
-          /tmp/git-cliff-2.14.2-x86_64-unknown-linux-gnu/git-cliff \
-            --tag "${GITHUB_REF_NAME}" --release-notes -o dist/release-notes.md
+          "$GIT_CLIFF" --current --tag "${GITHUB_REF_NAME}" -o dist/release-notes.md
           cat >> dist/release-notes.md <<'EOF'
 
           ## Install
